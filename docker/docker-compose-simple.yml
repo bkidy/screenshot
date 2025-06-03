@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  screenshot-service:
+    image: ghcr.io/puppeteer/puppeteer:latest
+    container_name: screenshot-service-simple
+    restart: unless-stopped
+    
+    ports:
+      - "3002:3002"
+    
+    working_dir: /home/pptruser
+    user: "pptruser"
+    
+    environment:
+      - NODE_ENV=production
+      - PORT=3002
+      - PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+      - PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
+    
+    volumes:
+      - ../src:/home/pptruser/src
+    
+    # 简化的启动命令 - 不安装额外依赖
+    command: >
+      sh -c "
+        echo 'Starting screenshot service...' &&
+        node -e \"
+          const express = require('express');
+          const app = express();
+          app.get('/health', (req, res) => res.json({status: 'ok'}));
+          app.listen(3002, '0.0.0.0', () => console.log('Server running on port 3002'));
+        \"
+      "
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s 
