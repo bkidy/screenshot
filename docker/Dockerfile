@@ -26,11 +26,10 @@ COPY --chown=pptruser:pptruser package*.json ./
 # 配置npm使用淘宝镜像源和性能优化
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 RUN npm config set registry https://registry.npmmirror.com && \
-    npm config set maxsockets 20 && \
-    npm config set network-timeout 300000
+    npm config set maxsockets 20
 
 # 安装Node.js依赖
-RUN npm install --only=production --no-audit --no-fund && npm cache clean --force
+RUN npm install --only=production --no-audit --no-fund --timeout=300000 && npm cache clean --force
 
 # 复制应用代码
 COPY --chown=pptruser:pptruser src/ ./src/
