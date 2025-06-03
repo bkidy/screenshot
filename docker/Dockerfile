@@ -23,7 +23,8 @@ USER pptruser
 # 复制package.json和package-lock.json（如果存在）
 COPY --chown=pptruser:pptruser package*.json ./
 
-# 安装Node.js依赖
+# 安装Node.js依赖（跳过Puppeteer Chrome下载）
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 RUN npm install --only=production --timeout=60000 && npm cache clean --force
 
 # 复制应用代码
