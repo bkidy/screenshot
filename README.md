@@ -1,6 +1,6 @@
 # Screenshot Service
 
-一个基于Docker和Puppeteer的智能截图服务，支持智能内容区域检测和裁剪功能。
+一个基于Puppeteer的智能截图Docker服务，可直接在服务器上进行部署，支持智能内容区域检测和裁剪功能。
 
 ## 功能特性
 
@@ -53,9 +53,7 @@ curl -X POST http://localhost:3002/screenshot \
 
 ## 集成指南
 
-如何集成到现有项目请参考 [docs/INTEGRATION.md](docs/INTEGRATION.md)
-
-## Git仓库设置
+直接通过HTTP进行访问，如果需要更多功能，请自行fork进行二次开发
 
 ### 设置远程仓库
 
