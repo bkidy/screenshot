@@ -1,5 +1,5 @@
 # 使用官方Puppeteer镜像作为基础
-FROM ghcr.io/puppeteer/puppeteer:21.0.0
+FROM ghcr.io/puppeteer/puppeteer:latest
 
 # 设置工作目录
 WORKDIR /app
@@ -7,16 +7,15 @@ WORKDIR /app
 # 创建非root用户（如果不存在）
 USER root
 
-# 修复Google Chrome GPG密钥问题并安装必要依赖
+# 安装必要的系统依赖
 RUN apt-get update && \
-    apt-get install -y gnupg wget && \
-    wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add - && \
-    apt-get update && \
+    apt-get install -y curl && \
     rm -rf /var/lib/apt/lists/*
 
 # 创建日志目录
 RUN mkdir -p /var/log/screenshot-service && \
-    chown -R pptruser:pptruser /var/log/screenshot-service
+    chown -R pptruser:pptruser /var/log/screenshot-service && \
+    chown -R pptruser:pptruser /app
 
 # 切换到非root用户
 USER pptruser
@@ -36,9 +35,9 @@ RUN touch .env
 # 暴露端口
 EXPOSE 3002
 
-# 简化健康检查，使用Node.js内置功能
+# 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD node -e "require('http').get('http://localhost:3002/health', (res) => process.exit(res.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+    CMD curl -f http://127.0.0.1:3002/health || exit 1
 
 # 设置环境变量
 ENV NODE_ENV=production

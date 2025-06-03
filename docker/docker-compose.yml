@@ -2,8 +2,11 @@ version: '3.8'
 
 services:
   screenshot-service:
-    # 使用官方Puppeteer镜像，避免构建问题
-    image: ghcr.io/puppeteer/puppeteer:latest
+    # 使用本地构建的镜像
+    image: screenshot-service:latest
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
     init: true
     cap_add:
       - SYS_ADMIN
@@ -15,7 +18,7 @@ services:
       - "3002:3002"
     
     # 工作目录和用户
-    working_dir: /home/pptruser
+    working_dir: /app
     user: "pptruser"
     
     # 环境变量
@@ -30,11 +33,8 @@ services:
     env_file:
       - ../.env
     
-    # 文件挂载 - 挂载整个src目录
+    # 文件挂载 - 只挂载日志目录
     volumes:
-      - ../src:/home/pptruser/src
-      - ../package.json:/home/pptruser/package.json
-      - ../.env:/home/pptruser/.env
       - screenshot-logs:/var/log/screenshot-service
       - /etc/localtime:/etc/localtime:ro
     
@@ -48,22 +48,17 @@ services:
           memory: 512M
           cpus: '0.25'
     
-    # 健康检查 - 使用curl（官方镜像已包含）
+    # 健康检查 - 修复地址
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3002/health"]
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:3002/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
     
-    # 启动命令 - 运行时安装依赖并启动
-    command: >
-      sh -c "npm install --no-save &&
-             node src/app.js"
-    
     # 标签
     labels:
-      - "com.screenshot-service.description=Lightweight Screenshot Service"
+      - "com.screenshot-service.description=Screenshot Service with Custom Build"
       - "com.screenshot-service.version=1.0.0"
 
 # 卷配置

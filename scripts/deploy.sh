@@ -116,9 +116,9 @@ deploy_service() {
     # 创建日志目录
     mkdir -p logs
     
-    # 拉取最新镜像（如果使用远程镜像）
-    log_info "拉取/构建镜像..."
-    docker-compose -f "$COMPOSE_FILE" build
+    # 构建镜像（使用自定义Dockerfile）
+    log_info "构建镜像..."
+    docker-compose -f "$COMPOSE_FILE" build --no-cache
     
     # 启动服务
     log_info "启动服务..."
@@ -126,7 +126,7 @@ deploy_service() {
     
     # 等待服务启动
     log_info "等待服务启动..."
-    sleep 15
+    sleep 20  # 减少等待时间，因为依赖已预装
     
     # 健康检查
     check_health
@@ -157,7 +157,7 @@ check_health() {
     local attempt=1
     
     while [ $attempt -le $max_attempts ]; do
-        if curl -f http://localhost:3002/health >/dev/null 2>&1; then
+        if curl -f http://127.0.0.1:3002/health >/dev/null 2>&1; then
             log_success "健康检查通过"
             return 0
         fi

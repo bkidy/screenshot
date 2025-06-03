@@ -1,126 +1,252 @@
-# Screenshot Service
+# 截图服务 (Screenshot Service)
 
-一个基于Puppeteer的智能截图Docker服务，可直接在服务器上进行部署，支持智能内容区域检测和裁剪功能。
+基于Docker和Puppeteer的高性能截图服务，支持智能内容裁剪和多种输出格式。
 
-## 功能特性
+## 特性
 
-- 🎯 **智能裁剪**: 自动检测内容边界，消除空白边框
-- 🐳 **Docker化部署**: 容器化部署，环境一致性
-- ⚡ **高性能**: Puppeteer实例池，支持并发处理
-- 🔧 **可配置**: 支持多种格式、质量、尺寸配置
-- 🛡️ **安全**: 内置认证和速率限制
-- 📊 **监控**: 完整的日志和性能监控
+- 🚀 基于Puppeteer的高质量截图生成
+- 🎯 智能内容区域检测和裁剪
+- 🐳 Docker容器化部署
+- 📊 健康检查和监控
+- 🔒 API密钥认证
+- 📝 详细的日志记录
+- ⚡ 高性能并发处理
+
+## 系统要求
+
+- Docker 20.10+
+- Docker Compose 2.0+
+- 2GB+ 可用内存
+- 1GB+ 可用磁盘空间
 
 ## 快速开始
 
-### 1. 环境准备
-
+### 1. 克隆项目
 ```bash
-# 复制环境变量文件
+git clone <repository-url>
+cd screenshot
+```
+
+### 2. 配置环境变量
+```bash
 cp env.example .env
-
-# 编辑环境变量
-nano .env
+# 编辑 .env 文件，设置API密钥等配置
 ```
 
-### 2. 启动服务
-
+### 3. 构建和部署
 ```bash
-# 使用Docker Compose启动
-cd docker
-docker-compose up -d
+# 使用部署脚本（推荐）
+./scripts/deploy.sh deploy
 
-# 查看服务状态
-docker-compose ps
+# 或手动构建部署
+docker-compose -f docker/docker-compose.yml build
+docker-compose -f docker/docker-compose.yml up -d
 ```
 
-### 3. 测试服务
-
+### 4. 验证服务
 ```bash
 # 健康检查
-curl http://localhost:3002/health
+curl http://127.0.0.1:3002/health
 
-# 测试截图
-curl -X POST http://localhost:3002/screenshot \
-  -H "Content-Type: application/json" \
-  -d '{"htmlContent":"<h1>Hello World</h1>","width":400,"height":300}' \
-  --output test.png
+# 查看服务状态
+./scripts/deploy.sh status
 ```
 
-## API文档
+## 部署架构
 
-详细的API文档请参考 [docs/README.md](docs/README.md)
+### 构建方式
+本服务使用**自定义Dockerfile构建**，基于官方Puppeteer镜像：
 
-## 集成指南
+- **基础镜像**: `ghcr.io/puppeteer/puppeteer:latest`
+- **依赖预装**: 构建时安装所有Node.js依赖
+- **快速启动**: 运行时直接启动应用，无需安装依赖
 
-直接通过HTTP进行访问，如果需要更多功能，请自行fork进行二次开发
+### 部署流程
+1. **构建阶段**: 使用Dockerfile构建包含所有依赖的镜像
+2. **部署阶段**: 启动预构建的容器
+3. **健康检查**: 自动验证服务可用性
 
-### 设置远程仓库
+## 部署脚本使用
 
+### 基本命令
 ```bash
-# 添加远程仓库（替换为你的仓库URL）
-git remote add origin https://github.com/your-username/screenshot-service.git
+# 部署服务
+./scripts/deploy.sh deploy
 
-# 推送到远程仓库
-git push -u origin master
+# 停止服务
+./scripts/deploy.sh stop
+
+# 重启服务
+./scripts/deploy.sh restart
+
+# 查看状态
+./scripts/deploy.sh status
+
+# 查看日志
+./scripts/deploy.sh logs
+
+# 健康检查
+./scripts/deploy.sh health
+
+# 更新服务
+./scripts/deploy.sh update
+
+# 清理资源
+./scripts/deploy.sh cleanup
 ```
 
-### 在主项目中使用
-
+### 构建脚本
 ```bash
-# 在主项目中添加为子模块
-cd /path/to/main-project
-git submodule add https://github.com/your-username/screenshot-service.git screenshot
+# 单独构建镜像
+./scripts/build.sh
 
-# 或者直接克隆到指定目录
-git clone https://github.com/your-username/screenshot-service.git screenshot
+# 构建指定标签
+./scripts/build.sh v1.0.0
 ```
 
-## 开发
+## API 接口
+
+### 健康检查
+```bash
+GET /health
+```
+
+响应示例：
+```json
+{
+  "status": "ok",
+  "timestamp": "2025-06-03T14:31:11.655Z",
+  "service": "screenshot-service",
+  "version": "1.0.0",
+  "uptime": 2.472007142,
+  "browser": "connected"
+}
+```
+
+### 截图生成
+```bash
+POST /screenshot
+Content-Type: application/json
+Authorization: Bearer YOUR_API_KEY
+
+{
+  "htmlContent": "<html>...</html>",
+  "width": 1200,
+  "height": 800,
+  "options": {
+    "format": "png",
+    "quality": 90,
+    "smartCrop": true,
+    "cropPadding": 10
+  }
+}
+```
+
+## 配置说明
+
+### 环境变量
+```bash
+# API认证
+API_KEY=your-secret-api-key
+
+# 网络配置
+PORT=3002
+CORS_ORIGINS=*
+
+# 日志配置
+LOG_LEVEL=info
+NODE_ENV=production
+
+# IP访问控制
+ALLOWED_IPS=192.168.1.100,10.0.0.50
+```
+
+### Docker配置
+- **内存限制**: 2GB
+- **CPU限制**: 1核心
+- **端口映射**: 3002:3002
+- **健康检查**: 每30秒检查一次
+
+## 故障排查
+
+### 常见问题
+
+1. **容器启动失败**
+```bash
+# 查看详细日志
+docker logs screenshot-service
+
+# 检查资源使用
+docker stats screenshot-service
+```
+
+2. **健康检查失败**
+```bash
+# 手动测试健康检查
+curl -f http://127.0.0.1:3002/health
+
+# 进入容器调试
+docker exec -it screenshot-service /bin/bash
+```
+
+3. **构建失败**
+```bash
+# 清理并重新构建
+docker-compose -f docker/docker-compose.yml down
+docker system prune -f
+./scripts/deploy.sh deploy
+```
+
+### 性能优化
+
+1. **内存优化**
+   - 调整Docker内存限制
+   - 监控内存使用情况
+
+2. **并发优化**
+   - 配置Puppeteer实例池
+   - 调整请求队列大小
+
+## 开发指南
 
 ### 本地开发
-
 ```bash
 # 安装依赖
 npm install
 
 # 启动开发服务器
 npm run dev
+
+# 运行测试
+npm test
 ```
 
-### 构建和部署
-
-```bash
-# 构建Docker镜像
-./scripts/build.sh
-
-# 部署到生产环境
-./scripts/deploy.sh
+### 代码结构
+```
+src/
+├── app.js              # 主应用入口
+├── config/             # 配置文件
+├── middleware/         # 中间件
+├── routes/             # 路由处理
+└── utils/              # 工具函数
 ```
 
-## 配置说明
+## 更新日志
 
-### 智能裁剪配置
-
-```javascript
-{
-  "smartCrop": true,        // 启用智能裁剪
-  "cropPadding": 10,        // 内容周围边距
-  "backgroundColor": "#fff"  // 背景颜色
-}
-```
-
-### 环境变量
-
-- `PORT`: 服务端口 (默认: 3002)
-- `NODE_ENV`: 运行环境 (development/production)
-- `API_KEY`: API认证密钥 (设置为'disabled'可关闭认证)
-- `CORS_ORIGINS`: 允许的CORS源
+### v1.0.0 (2025-06-03)
+- ✅ 基于自定义Dockerfile的构建流程
+- ✅ 修复健康检查地址问题
+- ✅ 优化部署脚本
+- ✅ 预装依赖，提升启动速度
+- ✅ 完善文档和故障排查指南
 
 ## 许可证
 
 MIT License
 
-## 贡献
+## 支持
 
-欢迎提交Issue和Pull Request！ 
+如有问题，请查看：
+1. [故障排查指南](#故障排查)
+2. [API文档](#api-接口)
+3. [配置说明](#配置说明) 
