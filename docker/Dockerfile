@@ -23,9 +23,14 @@ USER pptruser
 # 复制package.json和package-lock.json（如果存在）
 COPY --chown=pptruser:pptruser package*.json ./
 
-# 安装Node.js依赖（跳过Puppeteer Chrome下载）
+# 配置npm使用淘宝镜像源和性能优化
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-RUN npm install --only=production --timeout=60000 && npm cache clean --force
+RUN npm config set registry https://registry.npmmirror.com && \
+    npm config set maxsockets 20 && \
+    npm config set network-timeout 300000
+
+# 安装Node.js依赖
+RUN npm install --only=production --no-audit --no-fund && npm cache clean --force
 
 # 复制应用代码
 COPY --chown=pptruser:pptruser src/ ./src/
