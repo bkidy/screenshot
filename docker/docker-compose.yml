@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  screenshot-service:
+    # 使用官方Puppeteer镜像，避免构建问题
+    image: ghcr.io/puppeteer/puppeteer:latest
+    init: true
+    cap_add:
+      - SYS_ADMIN
+    container_name: screenshot-service
+    restart: unless-stopped
+    
+    # 端口映射
+    ports:
+      - "3002:3002"
+    
+    # 工作目录和用户
+    working_dir: /home/pptruser
+    user: "pptruser"
+    
+    # 环境变量
+    environment:
+      - NODE_ENV=production
+      - PORT=3002
+      - LOG_LEVEL=info
+      - API_KEY=${API_KEY:-disabled}
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+    
+    # 环境变量文件
+    env_file:
+      - ../.env
+    
+    # 文件挂载 - 挂载整个src目录
+    volumes:
+      - ../src:/home/pptruser/src
+      - ../package.json:/home/pptruser/package.json
+      - ../.env:/home/pptruser/.env
+      - screenshot-logs:/var/log/screenshot-service
+      - /etc/localtime:/etc/localtime:ro
+    
+    # 基础资源限制
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
+    
+    # 健康检查 - 使用curl（官方镜像已包含）
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    # 启动命令 - 运行时安装依赖并启动
+    command: >
+      sh -c "npm install --no-save &&
+             node src/app.js"
+    
+    # 标签
+    labels:
+      - "com.screenshot-service.description=Lightweight Screenshot Service"
+      - "com.screenshot-service.version=1.0.0"
+
+# 卷配置
+volumes:
+  screenshot-logs:
+    driver: local 
