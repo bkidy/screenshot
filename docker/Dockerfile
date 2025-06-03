@@ -23,8 +23,8 @@ USER pptruser
 # 复制package.json和package-lock.json（如果存在）
 COPY --chown=pptruser:pptruser package*.json ./
 
-# 安装Node.js依赖
-RUN npm ci --only=production && npm cache clean --force
+# 安装Node.js依赖（使用npm install而不是npm ci）
+RUN npm install --only=production && npm cache clean --force
 
 # 复制应用代码
 COPY --chown=pptruser:pptruser src/ ./src/
