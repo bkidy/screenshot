@@ -82,21 +82,29 @@ module.exports = {
       pageTimeout: 15000, // 恢复到15秒，足够处理大部分内容
       navigationTimeout: 10000, // 恢复到10秒
       
-      // 等待策略优化 - 提供快速和标准两种模式
-      waitStrategy: 'domcontentloaded', // 恢复到快速等待策略
-      fastMode: true, // 启用快速模式，减少不必要的等待
+      // 等待策略优化 - 提供多种性能模式
+      waitStrategy: 'domcontentloaded', // 标准等待策略
+      fastMode: true, // 启用快速模式
+      ultraFastMode: true, // 启用超快速模式，跳过所有等待
+      
+      // 超快速模式配置
+      ultraFastWaitStrategy: 'none', // 超快速模式不等待任何事件
+      skipAllDetectionInUltraFast: true, // 超快速模式跳过所有检测
       
       // 优化后的等待时间
-      additionalWaitTime: 300, // 减少到300ms，足够让DOM渲染完成
+      additionalWaitTime: 300, // 标准模式等待时间
+      fastModeWaitTime: 100, // 快速模式等待时间
+      ultraFastWaitTime: 0, // 超快速模式等待时间
       
       // 图片加载配置 - 大幅优化
-      imageWaitTime: 2000, // 减少到2秒，对于大部分图片足够
-      backgroundImageWaitTime: 3000, // 减少到3秒
-      renderCompletionWaitTime: 200, // 减少到200ms，仅用于确保渲染完成
+      imageWaitTime: 2000, // 标准模式图片等待时间
+      backgroundImageWaitTime: 3000, // 标准模式背景图片等待时间
+      renderCompletionWaitTime: 200, // 标准模式渲染完成等待时间
       
       // 智能检测配置
-      enableSmartDetection: true, // 启用智能检测，根据内容类型选择策略
+      enableSmartDetection: true, // 启用智能检测
       skipImageDetectionForCompleteHtml: true, // 对完整HTML跳过复杂的图片检测
+      disableSmartCropInFastMode: true, // 快速模式下禁用智能裁剪
       
       // 资源加载优化
       blockResources: [], // 保持清空，确保图片能正常加载

@@ -479,104 +479,113 @@ app.post('/screenshot', authenticate, screenshotRateLimit, concurrencyControl, a
     // 预处理HTML内容
     const processedHtmlContent = preprocessHtmlForScreenshot(htmlContent, options);
 
-    // 优化后的内容设置 - 使用配置的等待策略
-    await page.setContent(processedHtmlContent, {
-      waitUntil: config.screenshot.performance.waitStrategy,
-      timeout: config.screenshot.performance.navigationTimeout
-    });
-
-    // 智能等待策略 - 根据内容类型和配置选择最优策略
+    // 智能性能模式选择
     const isCompleteHtml = htmlContent.includes('<!DOCTYPE') || htmlContent.includes('<html');
+    const ultraFastMode = config.screenshot.performance.ultraFastMode;
     const fastMode = config.screenshot.performance.fastMode;
     const enableSmartDetection = config.screenshot.performance.enableSmartDetection;
     
-    // 智能图片检测 - 根据内容类型选择策略
-    let imageResult = { success: true, message: 'Skipped', stats: { totalImages: 0, totalBgImages: 0 } };
-    
-    if (enableSmartDetection && isCompleteHtml && config.screenshot.performance.skipImageDetectionForCompleteHtml) {
-      // 对于完整HTML文档，使用快速检测
-      console.log('[Screenshot] 完整HTML文档，使用快速模式，跳过复杂图片检测');
+    // 超快速模式：对完整HTML文档使用极速路径
+    if (ultraFastMode && isCompleteHtml && config.screenshot.performance.skipAllDetectionInUltraFast) {
+      console.log('[Screenshot] 超快速模式：跳过所有等待和检测，直接截图');
       
-      // 简单的图片存在性检查
-      const hasImages = await page.evaluate(() => {
-        const images = document.querySelectorAll('img');
-        const bgImages = Array.from(document.querySelectorAll('*')).some(el => {
-          const style = window.getComputedStyle(el);
-          return style.backgroundImage && style.backgroundImage !== 'none' && style.backgroundImage.includes('url(');
-        });
-        return { hasImages: images.length > 0, hasBgImages: bgImages };
+      // 使用最快的页面设置策略
+      await page.setContent(processedHtmlContent, {
+        waitUntil: 'domcontentloaded', // 最快的有效等待策略，等待DOM内容加载完成
+        timeout: 5000 // 短超时
       });
       
-      if (hasImages.hasImages || hasImages.hasBgImages) {
-        // 如果有图片，给一个较短的等待时间
-        const quickWaitTime = fastMode ? 1000 : 2000;
-        console.log(`[Screenshot] 检测到图片，快速等待 ${quickWaitTime}ms`);
-        await new Promise(resolve => setTimeout(resolve, quickWaitTime));
-      }
+      // 立即截图，无任何等待
+      console.log('[Screenshot] 超快速模式：立即执行截图');
       
-      imageResult = { 
-        success: true, 
-        message: 'Fast mode', 
-        stats: { 
-          totalImages: hasImages.hasImages ? 1 : 0, 
-          totalBgImages: hasImages.hasBgImages ? 1 : 0 
-        } 
-      };
     } else {
-      // 使用完整的图片检测逻辑（保留原有功能）
-      const imageWaitTime = options.imageWaitTime || config.screenshot.performance.imageWaitTime || 2000;
-      imageResult = await waitForAllImagesIfNeeded(page, imageWaitTime);
+      // 标准/快速模式：使用原有逻辑
+      await page.setContent(processedHtmlContent, {
+        waitUntil: config.screenshot.performance.waitStrategy,
+        timeout: config.screenshot.performance.navigationTimeout
+      });
+
+      // 智能图片检测 - 根据内容类型选择策略
+      let imageResult = { success: true, message: 'Skipped', stats: { totalImages: 0, totalBgImages: 0 } };
       
-      if (!imageResult.success) {
-        console.warn('[Screenshot] 图片检测失败，继续截图流程');
-      }
-    }
-
-    // 优化后的额外等待时间逻辑
-    let additionalWait = config.screenshot.performance.additionalWaitTime;
-    
-    if (fastMode) {
-      // 快速模式：大幅减少等待时间
-      additionalWait = Math.min(additionalWait, 200);
-      console.log(`[Screenshot] 快速模式，额外等待时间减少到 ${additionalWait}ms`);
-    } else if (imageResult.stats && imageResult.stats.totalBgImages > 0) {
-      // 标准模式：如果有背景图片，使用配置的等待时间
-      additionalWait = Math.max(additionalWait, config.screenshot.performance.renderCompletionWaitTime || 200);
-      console.log(`[Screenshot] 检测到 ${imageResult.stats.totalBgImages} 个背景图片，等待时间 ${additionalWait}ms`);
-    } else if (imageResult.message === 'No images found' || imageResult.message === 'Skipped') {
-      // 无图片时使用最短等待时间
-      additionalWait = Math.min(additionalWait, 100);
-    }
-    
-    if (additionalWait > 0) {
-      console.log(`[Screenshot] 额外等待 ${additionalWait}ms 确保渲染完成`);
-      await new Promise(resolve => setTimeout(resolve, additionalWait));
-    }
-
-    // 简化的渲染完成检查 - 仅在非快速模式下执行
-    if (!fastMode) {
-      try {
-        await page.evaluate(() => {
-          return new Promise((resolve) => {
-            if (document.readyState === 'complete') {
-              // 单次requestAnimationFrame即可
-              requestAnimationFrame(() => resolve());
-            } else {
-              window.addEventListener('load', () => {
-                requestAnimationFrame(() => resolve());
-              });
-            }
+      if (enableSmartDetection && isCompleteHtml && config.screenshot.performance.skipImageDetectionForCompleteHtml) {
+        // 对于完整HTML文档，使用快速检测
+        console.log('[Screenshot] 完整HTML文档，使用快速模式，跳过复杂图片检测');
+        
+        // 简单的图片存在性检查
+        const hasImages = await page.evaluate(() => {
+          const images = document.querySelectorAll('img');
+          const bgImages = Array.from(document.querySelectorAll('*')).some(el => {
+            const style = window.getComputedStyle(el);
+            return style.backgroundImage && style.backgroundImage !== 'none' && style.backgroundImage.includes('url(');
           });
+          return { hasImages: images.length > 0, hasBgImages: bgImages };
         });
-        console.log('[Screenshot] 渲染完成检查通过');
-      } catch (error) {
-        console.warn('[Screenshot] 渲染完成检查失败，继续截图:', error.message);
+        
+        if (hasImages.hasImages || hasImages.hasBgImages) {
+          // 如果有图片，给一个较短的等待时间
+          const quickWaitTime = fastMode ? 500 : 1000; // 进一步减少等待时间
+          console.log(`[Screenshot] 检测到图片，快速等待 ${quickWaitTime}ms`);
+          await new Promise(resolve => setTimeout(resolve, quickWaitTime));
+        }
+        
+        imageResult = { 
+          success: true, 
+          message: 'Fast mode', 
+          stats: { 
+            totalImages: hasImages.hasImages ? 1 : 0, 
+            totalBgImages: hasImages.hasBgImages ? 1 : 0 
+          } 
+        };
+      } else {
+        // 使用完整的图片检测逻辑（保留原有功能）
+        const imageWaitTime = options.imageWaitTime || config.screenshot.performance.imageWaitTime || 2000;
+        imageResult = await waitForAllImagesIfNeeded(page, imageWaitTime);
+        
+        if (!imageResult.success) {
+          console.warn('[Screenshot] 图片检测失败，继续截图流程');
+        }
       }
-    } else {
-      console.log('[Screenshot] 快速模式，跳过渲染完成检查');
+
+      // 优化后的额外等待时间逻辑
+      let additionalWait;
+      
+      if (fastMode) {
+        additionalWait = config.screenshot.performance.fastModeWaitTime || 100;
+        console.log(`[Screenshot] 快速模式，等待时间 ${additionalWait}ms`);
+      } else if (imageResult.stats && imageResult.stats.totalBgImages > 0) {
+        additionalWait = config.screenshot.performance.renderCompletionWaitTime || 200;
+        console.log(`[Screenshot] 检测到背景图片，等待时间 ${additionalWait}ms`);
+      } else {
+        additionalWait = Math.min(config.screenshot.performance.additionalWaitTime || 300, 100);
+      }
+      
+      if (additionalWait > 0) {
+        await new Promise(resolve => setTimeout(resolve, additionalWait));
+      }
+
+      // 简化的渲染完成检查 - 仅在标准模式下执行
+      if (!fastMode) {
+        try {
+          await page.evaluate(() => {
+            return new Promise((resolve) => {
+              if (document.readyState === 'complete') {
+                requestAnimationFrame(() => resolve());
+              } else {
+                window.addEventListener('load', () => {
+                  requestAnimationFrame(() => resolve());
+                });
+              }
+            });
+          });
+          console.log('[Screenshot] 渲染完成检查通过');
+        } catch (error) {
+          console.warn('[Screenshot] 渲染完成检查失败，继续截图:', error.message);
+        }
+      }
     }
 
-    // 简化的智能内容区域检测
+    // 智能内容区域检测 - 根据性能模式决定是否启用
     let clipRegion = {
       x: 0,
       y: 0,
@@ -584,8 +593,13 @@ app.post('/screenshot', authenticate, screenshotRateLimit, concurrencyControl, a
       height
     };
 
-    if (options.smartCrop !== false && config.screenshot.smartCrop.enabled) {
+    // 超快速模式或快速模式下禁用Smart Crop
+    const shouldSkipSmartCrop = ultraFastMode || 
+      (fastMode && config.screenshot.performance.disableSmartCropInFastMode);
+
+    if (!shouldSkipSmartCrop && options.smartCrop !== false && config.screenshot.smartCrop.enabled) {
       try {
+        console.log('[Screenshot] 执行智能裁剪检测');
         // 简化的内容边界检测
         const contentBounds = await page.evaluate((cropConfig) => {
           const elements = Array.from(document.querySelectorAll('*')).slice(0, cropConfig.maxElementsToCheck);
@@ -637,6 +651,8 @@ app.post('/screenshot', authenticate, screenshotRateLimit, concurrencyControl, a
       } catch (error) {
         console.warn('[CROP] Smart crop failed, using full viewport:', error.message);
       }
+    } else {
+      console.log('[Screenshot] 跳过智能裁剪（性能优化）');
     }
 
     // 构建截图选项
