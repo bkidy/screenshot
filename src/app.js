@@ -236,7 +236,7 @@ async function waitForImagesIfNeeded(page, maxWaitTime = 5000) {
       }
 
       // 等待一小段时间后再次检查
-      await page.waitForTimeout(checkInterval);
+      await new Promise(resolve => setTimeout(resolve, checkInterval));
     }
 
     // 超时处理
@@ -304,7 +304,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     service: 'screenshot-service',
-    version: '1.1.1',
+    version: '1.1.2',
     uptime: process.uptime(),
     browser: browser ? 'connected' : 'disconnected',
     performance: {
