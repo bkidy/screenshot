@@ -141,6 +141,136 @@ async function restartBrowser() {
 }
 
 /**
+ * 检测并等待图片加载完成
+ * @param {Object} page - Puppeteer页面对象
+ * @param {number} maxWaitTime - 最大等待时间（毫秒）
+ */
+async function waitForImagesIfNeeded(page, maxWaitTime = 5000) {
+  try {
+    // 首先检测页面是否包含图片
+    const imageInfo = await page.evaluate(() => {
+      const images = document.querySelectorAll('img');
+      const imageCount = images.length;
+      
+      if (imageCount === 0) {
+        return { hasImages: false, totalImages: 0 };
+      }
+
+      // 检查图片加载状态
+      let loadedCount = 0;
+      let failedCount = 0;
+      
+      for (const img of images) {
+        if (img.complete) {
+          if (img.naturalWidth > 0) {
+            loadedCount++;
+          } else {
+            failedCount++;
+          }
+        }
+      }
+      
+      return {
+        hasImages: true,
+        totalImages: imageCount,
+        loadedImages: loadedCount,
+        failedImages: failedCount,
+        needsWaiting: (loadedCount + failedCount) < imageCount
+      };
+    });
+
+    // 如果没有图片，直接返回
+    if (!imageInfo.hasImages) {
+      console.log('[ImageCheck] 页面无图片，跳过等待');
+      return { success: true, message: 'No images found' };
+    }
+
+    console.log(`[ImageCheck] 发现 ${imageInfo.totalImages} 个图片，已加载 ${imageInfo.loadedImages} 个`);
+
+    // 如果所有图片都已加载完成，直接返回
+    if (!imageInfo.needsWaiting) {
+      console.log('[ImageCheck] 所有图片已加载完成');
+      return { success: true, message: 'All images loaded' };
+    }
+
+    // 等待剩余图片加载，最多等待指定时间
+    console.log(`[ImageCheck] 等待剩余图片加载，最多等待 ${maxWaitTime}ms`);
+    
+    const startTime = Date.now();
+    const checkInterval = 200; // 每200ms检查一次
+    
+    while (Date.now() - startTime < maxWaitTime) {
+      const currentStatus = await page.evaluate(() => {
+        const images = document.querySelectorAll('img');
+        let loaded = 0;
+        let failed = 0;
+        
+        for (const img of images) {
+          if (img.complete) {
+            if (img.naturalWidth > 0) {
+              loaded++;
+            } else {
+              failed++;
+            }
+          }
+        }
+        
+        return {
+          loadedImages: loaded,
+          failedImages: failed,
+          totalProcessed: loaded + failed,
+          totalImages: images.length
+        };
+      });
+
+      // 如果所有图片都处理完成（加载成功或失败），退出等待
+      if (currentStatus.totalProcessed >= currentStatus.totalImages) {
+        const waitTime = Date.now() - startTime;
+        console.log(`[ImageCheck] 图片加载完成 - 耗时: ${waitTime}ms, 成功: ${currentStatus.loadedImages}, 失败: ${currentStatus.failedImages}`);
+        return { 
+          success: true, 
+          message: 'Images loaded',
+          stats: currentStatus,
+          waitTime
+        };
+      }
+
+      // 等待一小段时间后再次检查
+      await page.waitForTimeout(checkInterval);
+    }
+
+    // 超时处理
+    const finalStatus = await page.evaluate(() => {
+      const images = document.querySelectorAll('img');
+      let loaded = 0;
+      let failed = 0;
+      
+      for (const img of images) {
+        if (img.complete && img.naturalWidth > 0) {
+          loaded++;
+        } else {
+          failed++;
+        }
+      }
+      
+      return { loadedImages: loaded, failedImages: failed, totalImages: images.length };
+    });
+
+    console.log(`[ImageCheck] 等待超时 - 成功: ${finalStatus.loadedImages}, 失败/未完成: ${finalStatus.totalImages - finalStatus.loadedImages}`);
+    return { 
+      success: true, 
+      message: 'Timeout reached',
+      stats: finalStatus,
+      waitTime: maxWaitTime
+    };
+
+  } catch (error) {
+    console.error('[ImageCheck] 图片检测失败:', error.message);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
  * 验证截图参数
  */
 function validateScreenshotParams(params) {
@@ -174,7 +304,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     service: 'screenshot-service',
-    version: '1.1.0',
+    version: '1.1.1',
     uptime: process.uptime(),
     browser: browser ? 'connected' : 'disconnected',
     performance: {
@@ -273,8 +403,22 @@ app.post('/screenshot', authenticate, screenshotRateLimit, concurrencyControl, a
       timeout: config.screenshot.performance.navigationTimeout
     });
 
-    // 减少额外等待时间
-    await new Promise(resolve => setTimeout(resolve, config.screenshot.performance.additionalWaitTime));
+    // 智能图片加载检测 - 替换固定等待时间
+    const imageWaitTime = options.imageWaitTime || 5000; // 默认最多等待5秒
+    const imageResult = await waitForImagesIfNeeded(page, imageWaitTime);
+    
+    if (!imageResult.success) {
+      console.warn('[Screenshot] 图片检测失败，继续截图流程');
+    }
+
+    // 如果没有图片或图片已加载完成，仍然保留少量等待时间确保渲染完成
+    const additionalWait = imageResult.message === 'No images found' ? 
+      Math.min(config.screenshot.performance.additionalWaitTime, 200) : // 无图片时最多等待200ms
+      config.screenshot.performance.additionalWaitTime; // 有图片时使用配置的等待时间
+    
+    if (additionalWait > 0) {
+      await new Promise(resolve => setTimeout(resolve, additionalWait));
+    }
 
     // 简化的智能内容区域检测
     let clipRegion = {
