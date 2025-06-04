@@ -503,10 +503,12 @@ app.post('/screenshot', authenticate, screenshotRateLimit, concurrencyControl, a
       
       if (hasImages) {
         const waitTime = config.screenshot.performance.ultraFastWaitTime || 1000;
-        console.log(`[Screenshot] 超快速模式：检测到${hasImages}个img标签，等待 ${waitTime}ms`);
+        console.log(`[Screenshot] 超快速模式：检测到img标签，等待 ${waitTime}ms`);
         await new Promise(resolve => setTimeout(resolve, waitTime));
       } else {
-        console.log('[Screenshot] 超快速模式：无img标签，直接截图');
+        const baseWaitTime = 300; // 基本等待时间
+        console.log(`[Screenshot] 超快速模式：无img标签，基本等待 ${baseWaitTime}ms`);
+        await new Promise(resolve => setTimeout(resolve, baseWaitTime));
       }
       
     } else {
