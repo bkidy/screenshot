@@ -12,12 +12,22 @@ PROJECT_NAME="screenshot"
 SERVICE_NAME="screenshot-service"
 IMAGE_NAME="${PROJECT_NAME}-${SERVICE_NAME}"
 
+# Docker Compose 配置文件路径
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMPOSE_FILE="$SCRIPT_DIR/docker/docker-compose.yml"
+
 echo -e "${BLUE}🚀 Screenshot Service 启动脚本${NC}"
 echo "=================================="
 
 # 检查Docker是否运行
 if ! docker info >/dev/null 2>&1; then
     echo -e "${RED}❌ Docker 未运行，请先启动 Docker${NC}"
+    exit 1
+fi
+
+# 检查docker-compose.yml文件是否存在
+if [ ! -f "$COMPOSE_FILE" ]; then
+    echo -e "${RED}❌ Docker Compose 配置文件不存在: $COMPOSE_FILE${NC}"
     exit 1
 fi
 
@@ -35,7 +45,7 @@ check_image() {
 # 构建镜像
 build_image() {
     echo -e "${BLUE}🔨 开始构建镜像...${NC}"
-    if docker-compose build; then
+    if docker-compose -f "$COMPOSE_FILE" build; then
         echo -e "${GREEN}✅ 镜像构建成功${NC}"
         return 0
     else
@@ -47,10 +57,10 @@ build_image() {
 # 启动服务
 start_service() {
     echo -e "${BLUE}🚀 启动服务...${NC}"
-    if docker-compose up -d --no-build; then
+    if docker-compose -f "$COMPOSE_FILE" up -d --no-build; then
         echo -e "${GREEN}✅ 服务启动成功${NC}"
         echo -e "${BLUE}📊 服务状态:${NC}"
-        docker-compose ps
+        docker-compose -f "$COMPOSE_FILE" ps
         echo ""
         echo -e "${GREEN}🌐 服务地址: http://localhost:3002${NC}"
         echo -e "${GREEN}🏥 健康检查: http://localhost:3002/health${NC}"
@@ -89,21 +99,21 @@ main() {
             ;;
         "stop")
             echo -e "${YELLOW}🛑 停止服务...${NC}"
-            docker-compose down
+            docker-compose -f "$COMPOSE_FILE" down
             echo -e "${GREEN}✅ 服务已停止${NC}"
             ;;
         "restart")
             echo -e "${YELLOW}🔄 重启服务...${NC}"
-            docker-compose down
+            docker-compose -f "$COMPOSE_FILE" down
             start_service
             ;;
         "logs")
             echo -e "${BLUE}📋 查看日志...${NC}"
-            docker-compose logs -f
+            docker-compose -f "$COMPOSE_FILE" logs -f
             ;;
         "status")
             echo -e "${BLUE}📊 服务状态:${NC}"
-            docker-compose ps
+            docker-compose -f "$COMPOSE_FILE" ps
             ;;
         "help"|"-h"|"--help")
             echo -e "${BLUE}使用方法:${NC}"
