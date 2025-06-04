@@ -1,4 +1,4 @@
-# 使用官方Puppeteer镜像作为基础
+# 使用官方Puppeteer镜像作为基础，但进行优化配置
 FROM ghcr.io/puppeteer/puppeteer:latest
 
 # 设置工作目录
@@ -7,14 +7,19 @@ WORKDIR /app
 # 创建非root用户（如果不存在）
 USER root
 
-# 安装必要的系统依赖
+# 优化系统依赖安装
 RUN apt-get update && \
-    apt-get install -y curl && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get install -y \
+        curl \
+        dumb-init \
+        && \
+    # 清理缓存以减小镜像大小
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# 创建日志目录
-RUN mkdir -p /var/log/screenshot-service && \
-    chown -R pptruser:pptruser /var/log/screenshot-service && \
+# 创建优化的日志目录结构
+RUN mkdir -p /var/log/screenshot-service /tmp/screenshot-cache && \
+    chown -R pptruser:pptruser /var/log/screenshot-service /tmp/screenshot-cache && \
     chown -R pptruser:pptruser /app
 
 # 切换到非root用户
@@ -23,13 +28,19 @@ USER pptruser
 # 复制package.json和package-lock.json（如果存在）
 COPY --chown=pptruser:pptruser package*.json ./
 
-# 配置npm使用淘宝镜像源和性能优化
+# 优化的npm配置和依赖安装
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-RUN npm config set registry https://registry.npmmirror.com && \
-    npm config set maxsockets 20
+ENV NODE_ENV=production
 
-# 安装Node.js依赖
-RUN npm install --only=production --no-audit --no-fund --timeout=300000 && npm cache clean --force
+RUN npm config set registry https://registry.npmmirror.com && \
+    npm config set maxsockets 20 && \
+    npm config set fetch-retry-mintimeout 20000 && \
+    npm config set fetch-retry-maxtimeout 120000 && \
+    # 安装依赖并清理缓存 - 使用npm install而不是npm ci
+    npm install --only=production --no-audit --no-fund --timeout=300000 && \
+    npm cache clean --force && \
+    # 清理不必要的文件
+    rm -rf ~/.npm /tmp/*
 
 # 复制应用代码
 COPY --chown=pptruser:pptruser src/ ./src/
@@ -40,13 +51,18 @@ RUN touch .env
 # 暴露端口
 EXPOSE 3002
 
-# 健康检查
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+# 优化的健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://127.0.0.1:3002/health || exit 1
 
-# 设置环境变量
+# 性能优化的环境变量
 ENV NODE_ENV=production
 ENV PORT=3002
+ENV NODE_OPTIONS="--max-old-space-size=1536 --max-semi-space-size=128"
+ENV UV_THREADPOOL_SIZE=16
+
+# 使用dumb-init作为PID 1以正确处理信号
+ENTRYPOINT ["dumb-init", "--"]
 
 # 启动命令
 CMD ["node", "src/app.js"] 

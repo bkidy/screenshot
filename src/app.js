@@ -25,25 +25,117 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// 全局变量
+// 全局变量和性能监控
 let browser = null;
+let activePagesCount = 0;
+let totalRequestsProcessed = 0;
+const performanceStats = {
+  totalRequests: 0,
+  successfulRequests: 0,
+  failedRequests: 0,
+  averageProcessingTime: 0,
+  totalProcessingTime: 0
+};
 
 /**
- * 初始化Puppeteer浏览器
+ * 性能监控中间件
+ */
+function performanceMiddleware(req, res, next) {
+  req.startTime = Date.now();
+  performanceStats.totalRequests++;
+  
+  const originalSend = res.send;
+  res.send = function(data) {
+    const processingTime = Date.now() - req.startTime;
+    performanceStats.totalProcessingTime += processingTime;
+    performanceStats.averageProcessingTime = performanceStats.totalProcessingTime / performanceStats.totalRequests;
+    
+    if (res.statusCode < 400) {
+      performanceStats.successfulRequests++;
+    } else {
+      performanceStats.failedRequests++;
+    }
+    
+    if (config.logging.logPerformance) {
+      console.log(`[PERF] ${req.method} ${req.path} - ${processingTime}ms - Status: ${res.statusCode}`);
+    }
+    
+    originalSend.call(this, data);
+  };
+  
+  next();
+}
+
+app.use(performanceMiddleware);
+
+/**
+ * 并发控制中间件
+ */
+function concurrencyControl(req, res, next) {
+  if (activePagesCount >= config.screenshot.performance.maxConcurrentPages) {
+    return res.status(429).json({
+      error: 'Service busy',
+      message: 'Too many concurrent requests. Please try again later.',
+      activePagesCount,
+      maxConcurrentPages: config.screenshot.performance.maxConcurrentPages
+    });
+  }
+  next();
+}
+
+/**
+ * 优化后的浏览器初始化
  */
 async function initializeBrowser() {
   try {
-    console.log('Initializing Puppeteer browser...');
+    console.log('Initializing optimized Puppeteer browser...');
     
     browser = await puppeteer.launch({
       ...config.puppeteer,
       defaultViewport: config.puppeteer.defaultViewport
     });
     
-    console.log('Puppeteer browser initialized successfully');
+    console.log('Puppeteer browser initialized successfully with optimizations');
+    
+    // 浏览器健康检查
+    setInterval(async () => {
+      try {
+        if (browser && browser.isConnected()) {
+          const pages = await browser.pages();
+          console.log(`[HEALTH] Browser healthy, ${pages.length} pages open, ${activePagesCount} active`);
+          
+          // 如果处理的请求数过多，重启浏览器实例
+          if (totalRequestsProcessed > config.browserPool.restartThreshold) {
+            console.log(`[HEALTH] Restarting browser after ${totalRequestsProcessed} requests`);
+            await restartBrowser();
+          }
+        } else {
+          console.warn('[HEALTH] Browser disconnected, reinitializing...');
+          await initializeBrowser();
+        }
+      } catch (error) {
+        console.error('[HEALTH] Browser health check failed:', error.message);
+      }
+    }, config.browserPool.healthCheckInterval);
     
   } catch (error) {
     console.error('Failed to initialize Puppeteer browser:', error.message);
+    throw error;
+  }
+}
+
+/**
+ * 重启浏览器实例
+ */
+async function restartBrowser() {
+  try {
+    if (browser) {
+      await browser.close();
+    }
+    totalRequestsProcessed = 0;
+    await initializeBrowser();
+  } catch (error) {
+    console.error('Failed to restart browser:', error.message);
     throw error;
   }
 }
@@ -82,9 +174,15 @@ app.get('/health', (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     service: 'screenshot-service',
-    version: process.env.npm_package_version || '1.0.0',
+    version: '1.1.0',
     uptime: process.uptime(),
-    browser: browser ? 'connected' : 'disconnected'
+    browser: browser ? 'connected' : 'disconnected',
+    performance: {
+      activePagesCount,
+      totalRequestsProcessed,
+      ...performanceStats
+    },
+    memory: process.memoryUsage()
   };
 
   // 检查浏览器连接状态
@@ -98,13 +196,15 @@ app.get('/health', (req, res) => {
 });
 
 /**
- * 截图端点
+ * 优化后的截图端点
  */
-app.post('/screenshot', authenticate, screenshotRateLimit, async (req, res) => {
+app.post('/screenshot', authenticate, screenshotRateLimit, concurrencyControl, async (req, res) => {
   const startTime = Date.now();
   let page = null;
 
   try {
+    activePagesCount++;
+    
     // 参数验证
     const validationErrors = validateScreenshotParams(req.body);
     if (validationErrors.length > 0) {
@@ -124,11 +224,12 @@ app.post('/screenshot', authenticate, screenshotRateLimit, async (req, res) => {
     const {
       format = config.screenshot.defaultFormat,
       scale = config.screenshot.defaultScale,
-      timeout = config.screenshot.defaultTimeout,
-      quality
+      timeout = config.screenshot.performance.pageTimeout,
+      quality,
+      enableResourceBlocking = config.screenshot.performance.enableResourceBlocking
     } = options;
 
-    console.log(`Screenshot request: ${width}x${height}, format: ${format}`);
+    console.log(`[REQ] Screenshot: ${width}x${height}, format: ${format}, blocking: ${enableResourceBlocking}`);
 
     // 检查浏览器状态
     if (!browser || !browser.isConnected()) {
@@ -139,6 +240,19 @@ app.post('/screenshot', authenticate, screenshotRateLimit, async (req, res) => {
     // 创建新页面
     page = await browser.newPage();
     
+    // 资源阻止优化（可选）
+    if (enableResourceBlocking) {
+      await page.setRequestInterception(true);
+      page.on('request', (request) => {
+        const resourceType = request.resourceType();
+        if (config.screenshot.performance.blockResources.includes(resourceType)) {
+          request.abort();
+        } else {
+          request.continue();
+        }
+      });
+    }
+    
     // 设置视口
     await page.setViewport({
       width,
@@ -148,20 +262,21 @@ app.post('/screenshot', authenticate, screenshotRateLimit, async (req, res) => {
 
     // 设置超时
     page.setDefaultTimeout(timeout);
+    page.setDefaultNavigationTimeout(config.screenshot.performance.navigationTimeout);
 
-    // 预处理HTML内容以优化截图效果
+    // 预处理HTML内容
     const processedHtmlContent = preprocessHtmlForScreenshot(htmlContent, options);
 
-    // 设置HTML内容
+    // 优化后的内容设置 - 使用更快的等待策略
     await page.setContent(processedHtmlContent, {
-      waitUntil: 'networkidle0',
-      timeout
+      waitUntil: config.screenshot.performance.waitStrategy,
+      timeout: config.screenshot.performance.navigationTimeout
     });
 
-    // 等待渲染完成
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    // 减少额外等待时间
+    await new Promise(resolve => setTimeout(resolve, config.screenshot.performance.additionalWaitTime));
 
-    // 智能内容区域检测（如果启用）
+    // 简化的智能内容区域检测
     let clipRegion = {
       x: 0,
       y: 0,
@@ -169,12 +284,11 @@ app.post('/screenshot', authenticate, screenshotRateLimit, async (req, res) => {
       height
     };
 
-    if (options.smartCrop !== false) { // 默认启用智能裁剪
+    if (options.smartCrop !== false && config.screenshot.smartCrop.enabled) {
       try {
-        // 注入内容边界检测脚本
-        const contentBounds = await page.evaluate((cropPadding = 10) => {
-          // 获取所有可见元素的边界
-          const elements = document.querySelectorAll('*');
+        // 简化的内容边界检测
+        const contentBounds = await page.evaluate((cropConfig) => {
+          const elements = Array.from(document.querySelectorAll('*')).slice(0, cropConfig.maxElementsToCheck);
           let minX = Infinity, minY = Infinity, maxX = 0, maxY = 0;
           let hasContent = false;
 
@@ -182,32 +296,19 @@ app.post('/screenshot', authenticate, screenshotRateLimit, async (req, res) => {
             const rect = element.getBoundingClientRect();
             const style = window.getComputedStyle(element);
             
-            // 跳过不可见元素
+            // 简化的可见性检查
             if (rect.width === 0 || rect.height === 0 || 
                 style.display === 'none' || 
-                style.visibility === 'hidden' ||
-                style.opacity === '0') {
+                style.visibility === 'hidden') {
               continue;
             }
 
-            // 跳过html和body元素（除非它们有背景或边框）
-            if ((element.tagName === 'HTML' || element.tagName === 'BODY') && 
-                !style.backgroundColor && 
-                !style.backgroundImage &&
-                !style.border &&
-                !style.borderWidth) {
+            // 跳过复杂元素（性能优化）
+            if (cropConfig.skipComplexElements && 
+                (element.children.length > 10 || element.tagName === 'SVG')) {
               continue;
             }
 
-            // 跳过空的容器元素
-            if (element.children.length === 0 && 
-                !element.textContent?.trim() && 
-                !style.backgroundColor && 
-                !style.backgroundImage) {
-              continue;
-            }
-
-            // 更新边界
             if (rect.left < minX) minX = rect.left;
             if (rect.top < minY) minY = rect.top;
             if (rect.right > maxX) maxX = rect.right;
@@ -215,30 +316,26 @@ app.post('/screenshot', authenticate, screenshotRateLimit, async (req, res) => {
             hasContent = true;
           }
 
-          // 如果没有检测到内容，返回null使用默认区域
           if (!hasContent || minX === Infinity) {
             return null;
           }
 
-          // 使用传入的边距参数
-          const padding = Math.min(cropPadding, 50); // 限制最大边距
+          const padding = Math.min(cropConfig.padding, cropConfig.maxPadding);
           return {
             x: Math.max(0, minX - padding),
             y: Math.max(0, minY - padding),
             width: Math.min(window.innerWidth, maxX - minX + padding * 2),
             height: Math.min(window.innerHeight, maxY - minY + padding * 2)
           };
-        }, options.cropPadding || config.screenshot.smartCrop.padding);
+        }, config.screenshot.smartCrop);
 
         const minSize = config.screenshot.smartCrop.minContentSize;
         if (contentBounds && contentBounds.width > minSize && contentBounds.height > minSize) {
           clipRegion = contentBounds;
-          console.log(`Smart crop detected content area: ${clipRegion.width}x${clipRegion.height} at (${clipRegion.x}, ${clipRegion.y})`);
-        } else {
-          console.log('Smart crop: using full viewport (no content detected or content too small)');
+          console.log(`[CROP] Smart crop: ${clipRegion.width}x${clipRegion.height} at (${clipRegion.x}, ${clipRegion.y})`);
         }
       } catch (error) {
-        console.warn('Smart crop detection failed, using full viewport:', error.message);
+        console.warn('[CROP] Smart crop failed, using full viewport:', error.message);
       }
     }
 
@@ -257,14 +354,16 @@ app.post('/screenshot', authenticate, screenshotRateLimit, async (req, res) => {
     const buffer = await page.screenshot(screenshotOptions);
     
     const duration = Date.now() - startTime;
+    totalRequestsProcessed++;
     
-    console.log(`Screenshot generated successfully in ${duration}ms, size: ${buffer.length} bytes`);
+    console.log(`[SUCCESS] Screenshot generated in ${duration}ms, size: ${buffer.length} bytes`);
 
     // 设置响应头
     res.set({
       'Content-Type': `image/${format}`,
       'Content-Length': buffer.length,
-      'X-Processing-Time': `${duration}ms`
+      'X-Processing-Time': `${duration}ms`,
+      'X-Total-Processed': totalRequestsProcessed
     });
 
     res.send(buffer);
@@ -272,7 +371,7 @@ app.post('/screenshot', authenticate, screenshotRateLimit, async (req, res) => {
   } catch (error) {
     const duration = Date.now() - startTime;
     
-    console.error(`Screenshot generation failed in ${duration}ms:`, error.message);
+    console.error(`[ERROR] Screenshot failed in ${duration}ms:`, error.message);
 
     res.status(500).json({
       error: 'Screenshot generation failed',
@@ -280,15 +379,39 @@ app.post('/screenshot', authenticate, screenshotRateLimit, async (req, res) => {
       duration: `${duration}ms`
     });
   } finally {
+    activePagesCount--;
+    
     // 清理页面资源
     if (page) {
       try {
         await page.close();
       } catch (error) {
-        console.warn('Failed to close page:', error.message);
+        console.warn('[CLEANUP] Failed to close page:', error.message);
       }
     }
   }
+});
+
+/**
+ * 性能统计端点
+ */
+app.get('/stats', authenticate, (req, res) => {
+  res.json({
+    service: 'screenshot-service',
+    version: '1.1.0',
+    performance: {
+      ...performanceStats,
+      activePagesCount,
+      totalRequestsProcessed,
+      uptime: process.uptime()
+    },
+    memory: process.memoryUsage(),
+    config: {
+      maxConcurrentPages: config.screenshot.performance.maxConcurrentPages,
+      waitStrategy: config.screenshot.performance.waitStrategy,
+      resourceBlocking: config.screenshot.performance.enableResourceBlocking
+    }
+  });
 });
 
 /**
@@ -297,13 +420,14 @@ app.post('/screenshot', authenticate, screenshotRateLimit, async (req, res) => {
 app.get('/info', authenticate, (req, res) => {
   res.json({
     service: 'screenshot-service',
-    version: process.env.npm_package_version || '1.0.0',
+    version: '1.1.0',
     environment: process.env.NODE_ENV || 'development',
     config: {
       maxWidth: config.screenshot.maxWidth,
       maxHeight: config.screenshot.maxHeight,
       supportedFormats: config.screenshot.supportedFormats,
-      defaultTimeout: config.screenshot.defaultTimeout
+      defaultTimeout: config.screenshot.performance.pageTimeout,
+      maxConcurrentPages: config.screenshot.performance.maxConcurrentPages
     }
   });
 });

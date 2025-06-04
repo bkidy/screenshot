@@ -6,37 +6,100 @@ module.exports = {
     timeout: 30000
   },
 
-  // Puppeteer配置
+  // 优化后的Puppeteer配置
   puppeteer: {
     headless: true,
     args: [
+      // 必需的安全参数
       '--no-sandbox',
       '--disable-setuid-sandbox',
+      
+      // 内存和性能优化
       '--disable-dev-shm-usage',
-      '--disable-gpu'
+      '--disable-gpu',
+      '--disable-accelerated-2d-canvas',
+      '--disable-accelerated-jpeg-decoding',
+      '--disable-accelerated-mjpeg-decode',
+      '--disable-accelerated-video-decode',
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
+      
+      // 网络和资源优化
+      '--disable-web-security',
+      '--disable-features=TranslateUI,BlinkGenPropertyTrees',
+      '--disable-ipc-flooding-protection',
+      '--disable-default-apps',
+      '--disable-extensions',
+      '--disable-component-extensions-with-background-pages',
+      '--disable-background-networking',
+      '--disable-sync',
+      
+      // 渲染优化
+      '--hide-scrollbars',
+      '--mute-audio',
+      '--no-default-browser-check',
+      '--no-first-run',
+      '--disable-infobars',
+      '--disable-notifications',
+      '--disable-popup-blocking',
+      
+      // 内存管理
+      '--memory-pressure-off',
+      '--max_old_space_size=4096',
+      
+      // 进程优化（谨慎使用）
+      '--single-process', // 在容器环境中可以提升性能
+      '--no-zygote'
     ],
+    // 优化默认视口 - 减小默认尺寸以提升性能
     defaultViewport: {
-      width: 1920,
-      height: 1080
-    }
+      width: 1280,
+      height: 720
+    },
+    // 连接超时优化
+    timeout: 30000,
+    // 禁用默认超时
+    protocolTimeout: 30000
   },
 
-  // 截图默认配置
+  // 优化后的截图配置
   screenshot: {
-    defaultWidth: 1920,
-    defaultHeight: 1080,
+    // 调整默认尺寸以平衡质量和性能
+    defaultWidth: 1280,
+    defaultHeight: 720,
     defaultFormat: 'png',
-    defaultScale: 2,
-    defaultTimeout: 30000,
+    defaultScale: 1, // 降低默认缩放以提升性能
+    defaultTimeout: 15000, // 减少默认超时
     maxWidth: 4096,
     maxHeight: 4096,
     supportedFormats: ['png', 'jpeg', 'webp'],
-    // 智能裁剪配置
+    
+    // 性能优化配置
+    performance: {
+      // 并发控制
+      maxConcurrentPages: 3, // 限制同时处理的页面数
+      pageTimeout: 15000, // 页面超时
+      navigationTimeout: 10000, // 导航超时
+      
+      // 等待策略优化
+      waitStrategy: 'domcontentloaded', // 更快的等待策略
+      additionalWaitTime: 500, // 减少额外等待时间
+      
+      // 资源加载优化
+      blockResources: ['image', 'stylesheet', 'font'], // 可选：阻止不必要的资源加载
+      enableResourceBlocking: false // 默认不启用，可通过请求参数控制
+    },
+    
+    // 简化的智能裁剪配置
     smartCrop: {
       enabled: true,
-      minContentSize: 50, // 最小内容尺寸（像素）
-      padding: 10, // 内容周围的边距（像素）
-      maxPadding: 50 // 最大边距限制
+      minContentSize: 50,
+      padding: 10,
+      maxPadding: 50,
+      // 性能优化：限制智能裁剪的复杂度
+      maxElementsToCheck: 100,
+      skipComplexElements: true
     }
   },
 
@@ -48,8 +111,19 @@ module.exports = {
     corsOrigins: process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : ['*']
   },
 
-  // 简化的日志配置
+  // 日志配置
   logging: {
-    level: process.env.LOG_LEVEL || 'info'
+    level: process.env.LOG_LEVEL || 'info',
+    // 性能日志
+    logPerformance: process.env.LOG_PERFORMANCE === 'true'
+  },
+
+  // 新增：浏览器实例池配置
+  browserPool: {
+    maxInstances: 2, // 最大浏览器实例数
+    minInstances: 1, // 最小保持实例数
+    idleTimeout: 300000, // 5分钟空闲超时
+    healthCheckInterval: 60000, // 1分钟健康检查间隔
+    restartThreshold: 100 // 处理100个请求后重启实例
   }
 } 
