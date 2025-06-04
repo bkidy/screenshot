@@ -141,22 +141,49 @@ async function restartBrowser() {
 }
 
 /**
- * 检测并等待图片加载完成
+ * 检测并等待所有图片（包括背景图片）加载完成
  * @param {Object} page - Puppeteer页面对象
  * @param {number} maxWaitTime - 最大等待时间（毫秒）
  */
-async function waitForImagesIfNeeded(page, maxWaitTime = 5000) {
+async function waitForAllImagesIfNeeded(page, maxWaitTime = 8000) {
   try {
-    // 首先检测页面是否包含图片
+    // 检测页面中的所有图片（包括背景图片）
     const imageInfo = await page.evaluate(() => {
       const images = document.querySelectorAll('img');
       const imageCount = images.length;
       
-      if (imageCount === 0) {
-        return { hasImages: false, totalImages: 0 };
+      // 检查CSS背景图片
+      const elementsWithBgImages = [];
+      const allElements = document.querySelectorAll('*');
+      
+      for (const element of allElements) {
+        const style = window.getComputedStyle(element);
+        const bgImage = style.backgroundImage;
+        
+        if (bgImage && bgImage !== 'none' && bgImage.includes('url(')) {
+          // 提取背景图片URL
+          const urlMatch = bgImage.match(/url\(['"]?([^'"]+)['"]?\)/);
+          if (urlMatch && urlMatch[1]) {
+            elementsWithBgImages.push({
+              element,
+              url: urlMatch[1],
+              loaded: false
+            });
+          }
+        }
+      }
+      
+      console.log(`[ImageDetection] 发现 ${imageCount} 个img标签, ${elementsWithBgImages.length} 个背景图片`);
+      
+      if (imageCount === 0 && elementsWithBgImages.length === 0) {
+        return { 
+          hasImages: false, 
+          totalImages: 0,
+          totalBgImages: 0
+        };
       }
 
-      // 检查图片加载状态
+      // 检查img标签加载状态
       let loadedCount = 0;
       let failedCount = 0;
       
@@ -170,12 +197,35 @@ async function waitForImagesIfNeeded(page, maxWaitTime = 5000) {
         }
       }
       
+      // 检查背景图片加载状态
+      let bgLoadedCount = 0;
+      const bgImagePromises = [];
+      
+      for (const bgInfo of elementsWithBgImages) {
+        const testImg = new Image();
+        const promise = new Promise((resolve) => {
+          testImg.onload = () => {
+            bgInfo.loaded = true;
+            bgLoadedCount++;
+            resolve(true);
+          };
+          testImg.onerror = () => {
+            resolve(false);
+          };
+          testImg.src = bgInfo.url;
+        });
+        bgImagePromises.push(promise);
+      }
+      
       return {
         hasImages: true,
         totalImages: imageCount,
+        totalBgImages: elementsWithBgImages.length,
         loadedImages: loadedCount,
         failedImages: failedCount,
-        needsWaiting: (loadedCount + failedCount) < imageCount
+        bgImagePromises,
+        bgImageUrls: elementsWithBgImages.map(bg => bg.url),
+        needsWaiting: (loadedCount + failedCount) < imageCount || elementsWithBgImages.length > 0
       };
     });
 
@@ -185,83 +235,115 @@ async function waitForImagesIfNeeded(page, maxWaitTime = 5000) {
       return { success: true, message: 'No images found' };
     }
 
-    console.log(`[ImageCheck] 发现 ${imageInfo.totalImages} 个图片，已加载 ${imageInfo.loadedImages} 个`);
+    console.log(`[ImageCheck] 发现 ${imageInfo.totalImages} 个img标签, ${imageInfo.totalBgImages} 个背景图片`);
+    console.log(`[ImageCheck] 背景图片URLs: ${imageInfo.bgImageUrls.join(', ')}`);
 
-    // 如果所有图片都已加载完成，直接返回
-    if (!imageInfo.needsWaiting) {
-      console.log('[ImageCheck] 所有图片已加载完成');
-      return { success: true, message: 'All images loaded' };
+    // 如果有背景图片，需要特别处理
+    if (imageInfo.totalBgImages > 0) {
+      console.log(`[ImageCheck] 检测到背景图片，开始等待加载...`);
+      
+      const startTime = Date.now();
+      const checkInterval = 300; // 每300ms检查一次
+      let allBgImagesLoaded = false;
+      
+      // 等待背景图片加载
+      while (Date.now() - startTime < maxWaitTime && !allBgImagesLoaded) {
+        const bgLoadStatus = await page.evaluate((bgUrls) => {
+          let loadedCount = 0;
+          const promises = bgUrls.map(url => {
+            return new Promise((resolve) => {
+              const testImg = new Image();
+              testImg.onload = () => resolve(true);
+              testImg.onerror = () => resolve(false);
+              testImg.src = url;
+              
+              // 如果图片已经在缓存中，立即触发onload
+              if (testImg.complete) {
+                if (testImg.naturalWidth > 0) {
+                  resolve(true);
+                } else {
+                  resolve(false);
+                }
+              }
+            });
+          });
+          
+          return Promise.all(promises).then(results => {
+            const loaded = results.filter(r => r).length;
+            return {
+              loadedBgImages: loaded,
+              totalBgImages: bgUrls.length,
+              allLoaded: loaded === bgUrls.length
+            };
+          });
+        }, imageInfo.bgImageUrls);
+        
+        console.log(`[ImageCheck] 背景图片加载状态: ${bgLoadStatus.loadedBgImages}/${bgLoadStatus.totalBgImages}`);
+        
+        if (bgLoadStatus.allLoaded) {
+          allBgImagesLoaded = true;
+          const waitTime = Date.now() - startTime;
+          console.log(`[ImageCheck] 所有背景图片加载完成 - 耗时: ${waitTime}ms`);
+          break;
+        }
+        
+        // 等待一小段时间后再次检查
+        await new Promise(resolve => setTimeout(resolve, checkInterval));
+      }
+      
+      if (!allBgImagesLoaded) {
+        const waitTime = Date.now() - startTime;
+        console.log(`[ImageCheck] 背景图片等待超时 - 耗时: ${waitTime}ms，继续截图流程`);
+      }
     }
 
-    // 等待剩余图片加载，最多等待指定时间
-    console.log(`[ImageCheck] 等待剩余图片加载，最多等待 ${maxWaitTime}ms`);
-    
-    const startTime = Date.now();
-    const checkInterval = 200; // 每200ms检查一次
-    
-    while (Date.now() - startTime < maxWaitTime) {
-      const currentStatus = await page.evaluate(() => {
-        const images = document.querySelectorAll('img');
-        let loaded = 0;
-        let failed = 0;
-        
-        for (const img of images) {
-          if (img.complete) {
-            if (img.naturalWidth > 0) {
-              loaded++;
-            } else {
-              failed++;
+    // 检查常规img标签
+    if (imageInfo.totalImages > 0) {
+      const startTime = Date.now();
+      const checkInterval = 200;
+      
+      while (Date.now() - startTime < maxWaitTime) {
+        const currentStatus = await page.evaluate(() => {
+          const images = document.querySelectorAll('img');
+          let loaded = 0;
+          let failed = 0;
+          
+          for (const img of images) {
+            if (img.complete) {
+              if (img.naturalWidth > 0) {
+                loaded++;
+              } else {
+                failed++;
+              }
             }
           }
+          
+          return {
+            loadedImages: loaded,
+            failedImages: failed,
+            totalProcessed: loaded + failed,
+            totalImages: images.length
+          };
+        });
+
+        // 如果所有img标签都处理完成，退出等待
+        if (currentStatus.totalProcessed >= currentStatus.totalImages) {
+          const waitTime = Date.now() - startTime;
+          console.log(`[ImageCheck] img标签加载完成 - 耗时: ${waitTime}ms, 成功: ${currentStatus.loadedImages}, 失败: ${currentStatus.failedImages}`);
+          break;
         }
-        
-        return {
-          loadedImages: loaded,
-          failedImages: failed,
-          totalProcessed: loaded + failed,
-          totalImages: images.length
-        };
-      });
 
-      // 如果所有图片都处理完成（加载成功或失败），退出等待
-      if (currentStatus.totalProcessed >= currentStatus.totalImages) {
-        const waitTime = Date.now() - startTime;
-        console.log(`[ImageCheck] 图片加载完成 - 耗时: ${waitTime}ms, 成功: ${currentStatus.loadedImages}, 失败: ${currentStatus.failedImages}`);
-        return { 
-          success: true, 
-          message: 'Images loaded',
-          stats: currentStatus,
-          waitTime
-        };
+        await new Promise(resolve => setTimeout(resolve, checkInterval));
       }
-
-      // 等待一小段时间后再次检查
-      await new Promise(resolve => setTimeout(resolve, checkInterval));
     }
 
-    // 超时处理
-    const finalStatus = await page.evaluate(() => {
-      const images = document.querySelectorAll('img');
-      let loaded = 0;
-      let failed = 0;
-      
-      for (const img of images) {
-        if (img.complete && img.naturalWidth > 0) {
-          loaded++;
-        } else {
-          failed++;
-        }
-      }
-      
-      return { loadedImages: loaded, failedImages: failed, totalImages: images.length };
-    });
-
-    console.log(`[ImageCheck] 等待超时 - 成功: ${finalStatus.loadedImages}, 失败/未完成: ${finalStatus.totalImages - finalStatus.loadedImages}`);
     return { 
       success: true, 
-      message: 'Timeout reached',
-      stats: finalStatus,
-      waitTime: maxWaitTime
+      message: 'All images processed',
+      stats: {
+        totalImages: imageInfo.totalImages,
+        totalBgImages: imageInfo.totalBgImages
+      }
     };
 
   } catch (error) {
@@ -397,27 +479,101 @@ app.post('/screenshot', authenticate, screenshotRateLimit, concurrencyControl, a
     // 预处理HTML内容
     const processedHtmlContent = preprocessHtmlForScreenshot(htmlContent, options);
 
-    // 优化后的内容设置 - 使用更快的等待策略
+    // 优化后的内容设置 - 使用配置的等待策略
     await page.setContent(processedHtmlContent, {
       waitUntil: config.screenshot.performance.waitStrategy,
       timeout: config.screenshot.performance.navigationTimeout
     });
 
-    // 智能图片加载检测 - 替换固定等待时间
-    const imageWaitTime = options.imageWaitTime || 5000; // 默认最多等待5秒
-    const imageResult = await waitForImagesIfNeeded(page, imageWaitTime);
+    // 智能等待策略 - 根据内容类型和配置选择最优策略
+    const isCompleteHtml = htmlContent.includes('<!DOCTYPE') || htmlContent.includes('<html');
+    const fastMode = config.screenshot.performance.fastMode;
+    const enableSmartDetection = config.screenshot.performance.enableSmartDetection;
     
-    if (!imageResult.success) {
-      console.warn('[Screenshot] 图片检测失败，继续截图流程');
+    // 智能图片检测 - 根据内容类型选择策略
+    let imageResult = { success: true, message: 'Skipped', stats: { totalImages: 0, totalBgImages: 0 } };
+    
+    if (enableSmartDetection && isCompleteHtml && config.screenshot.performance.skipImageDetectionForCompleteHtml) {
+      // 对于完整HTML文档，使用快速检测
+      console.log('[Screenshot] 完整HTML文档，使用快速模式，跳过复杂图片检测');
+      
+      // 简单的图片存在性检查
+      const hasImages = await page.evaluate(() => {
+        const images = document.querySelectorAll('img');
+        const bgImages = Array.from(document.querySelectorAll('*')).some(el => {
+          const style = window.getComputedStyle(el);
+          return style.backgroundImage && style.backgroundImage !== 'none' && style.backgroundImage.includes('url(');
+        });
+        return { hasImages: images.length > 0, hasBgImages: bgImages };
+      });
+      
+      if (hasImages.hasImages || hasImages.hasBgImages) {
+        // 如果有图片，给一个较短的等待时间
+        const quickWaitTime = fastMode ? 1000 : 2000;
+        console.log(`[Screenshot] 检测到图片，快速等待 ${quickWaitTime}ms`);
+        await new Promise(resolve => setTimeout(resolve, quickWaitTime));
+      }
+      
+      imageResult = { 
+        success: true, 
+        message: 'Fast mode', 
+        stats: { 
+          totalImages: hasImages.hasImages ? 1 : 0, 
+          totalBgImages: hasImages.hasBgImages ? 1 : 0 
+        } 
+      };
+    } else {
+      // 使用完整的图片检测逻辑（保留原有功能）
+      const imageWaitTime = options.imageWaitTime || config.screenshot.performance.imageWaitTime || 2000;
+      imageResult = await waitForAllImagesIfNeeded(page, imageWaitTime);
+      
+      if (!imageResult.success) {
+        console.warn('[Screenshot] 图片检测失败，继续截图流程');
+      }
     }
 
-    // 如果没有图片或图片已加载完成，仍然保留少量等待时间确保渲染完成
-    const additionalWait = imageResult.message === 'No images found' ? 
-      Math.min(config.screenshot.performance.additionalWaitTime, 200) : // 无图片时最多等待200ms
-      config.screenshot.performance.additionalWaitTime; // 有图片时使用配置的等待时间
+    // 优化后的额外等待时间逻辑
+    let additionalWait = config.screenshot.performance.additionalWaitTime;
+    
+    if (fastMode) {
+      // 快速模式：大幅减少等待时间
+      additionalWait = Math.min(additionalWait, 200);
+      console.log(`[Screenshot] 快速模式，额外等待时间减少到 ${additionalWait}ms`);
+    } else if (imageResult.stats && imageResult.stats.totalBgImages > 0) {
+      // 标准模式：如果有背景图片，使用配置的等待时间
+      additionalWait = Math.max(additionalWait, config.screenshot.performance.renderCompletionWaitTime || 200);
+      console.log(`[Screenshot] 检测到 ${imageResult.stats.totalBgImages} 个背景图片，等待时间 ${additionalWait}ms`);
+    } else if (imageResult.message === 'No images found' || imageResult.message === 'Skipped') {
+      // 无图片时使用最短等待时间
+      additionalWait = Math.min(additionalWait, 100);
+    }
     
     if (additionalWait > 0) {
+      console.log(`[Screenshot] 额外等待 ${additionalWait}ms 确保渲染完成`);
       await new Promise(resolve => setTimeout(resolve, additionalWait));
+    }
+
+    // 简化的渲染完成检查 - 仅在非快速模式下执行
+    if (!fastMode) {
+      try {
+        await page.evaluate(() => {
+          return new Promise((resolve) => {
+            if (document.readyState === 'complete') {
+              // 单次requestAnimationFrame即可
+              requestAnimationFrame(() => resolve());
+            } else {
+              window.addEventListener('load', () => {
+                requestAnimationFrame(() => resolve());
+              });
+            }
+          });
+        });
+        console.log('[Screenshot] 渲染完成检查通过');
+      } catch (error) {
+        console.warn('[Screenshot] 渲染完成检查失败，继续截图:', error.message);
+      }
+    } else {
+      console.log('[Screenshot] 快速模式，跳过渲染完成检查');
     }
 
     // 简化的智能内容区域检测
@@ -580,48 +736,28 @@ app.get('/info', authenticate, (req, res) => {
  * 预处理HTML内容以优化截图效果
  */
 function preprocessHtmlForScreenshot(htmlContent, options = {}) {
-  // 如果已经是完整的HTML文档，直接处理
+  // 如果已经是完整的HTML文档，使用最小化干预策略
   if (htmlContent.includes('<!DOCTYPE') || htmlContent.includes('<html')) {
-    // 注入优化CSS
+    // 注入最小化的重置CSS，避免干扰原有布局
     const optimizationCSS = `
       <style>
-        /* 截图优化样式 */
-        * {
-          box-sizing: border-box;
-        }
-        
+        /* 最小化截图优化样式 - 仅重置必要的默认样式 */
         html, body {
           margin: 0 !important;
           padding: 0 !important;
-          width: 100% !important;
-          height: 100% !important;
-          overflow: hidden !important;
+          /* 移除强制的宽高限制，保持原有尺寸 */
+          /* 移除强制的overflow hidden，让内容自然显示 */
           background: ${options.backgroundColor || 'transparent'} !important;
         }
         
-        /* 确保内容居中显示 */
-        body {
-          display: flex !important;
-          align-items: center !important;
-          justify-content: center !important;
-        }
+        /* 移除强制的flex布局，保持原有布局系统 */
         
-        /* 移除可能的默认边距 */
-        body > * {
-          max-width: 100% !important;
-          max-height: 100% !important;
-        }
-        
-        /* 隐藏滚动条 */
+        /* 隐藏滚动条但不影响布局 */
         ::-webkit-scrollbar {
           display: none !important;
         }
         
-        /* 确保图片不会溢出 */
-        img {
-          max-width: 100% !important;
-          height: auto !important;
-        }
+        /* 移除对img标签的强制限制，保持原有样式 */
       </style>
     `;
     
@@ -635,7 +771,7 @@ function preprocessHtmlForScreenshot(htmlContent, options = {}) {
     }
   }
   
-  // 如果不是完整的HTML文档，包装它
+  // 如果不是完整的HTML文档，使用包装容器（保持原有逻辑）
   return `
     <!DOCTYPE html>
     <html>
@@ -643,7 +779,7 @@ function preprocessHtmlForScreenshot(htmlContent, options = {}) {
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
-          /* 截图优化样式 */
+          /* 截图优化样式 - 仅用于HTML片段 */
           * {
             margin: 0;
             padding: 0;

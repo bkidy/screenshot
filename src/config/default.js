@@ -79,16 +79,28 @@ module.exports = {
     performance: {
       // 并发控制
       maxConcurrentPages: 3, // 限制同时处理的页面数
-      pageTimeout: 15000, // 页面超时
-      navigationTimeout: 10000, // 导航超时
+      pageTimeout: 15000, // 恢复到15秒，足够处理大部分内容
+      navigationTimeout: 10000, // 恢复到10秒
       
-      // 等待策略优化
-      waitStrategy: 'domcontentloaded', // 更快的等待策略
-      additionalWaitTime: 500, // 减少额外等待时间
+      // 等待策略优化 - 提供快速和标准两种模式
+      waitStrategy: 'domcontentloaded', // 恢复到快速等待策略
+      fastMode: true, // 启用快速模式，减少不必要的等待
+      
+      // 优化后的等待时间
+      additionalWaitTime: 300, // 减少到300ms，足够让DOM渲染完成
+      
+      // 图片加载配置 - 大幅优化
+      imageWaitTime: 2000, // 减少到2秒，对于大部分图片足够
+      backgroundImageWaitTime: 3000, // 减少到3秒
+      renderCompletionWaitTime: 200, // 减少到200ms，仅用于确保渲染完成
+      
+      // 智能检测配置
+      enableSmartDetection: true, // 启用智能检测，根据内容类型选择策略
+      skipImageDetectionForCompleteHtml: true, // 对完整HTML跳过复杂的图片检测
       
       // 资源加载优化
-      blockResources: ['image', 'stylesheet', 'font'], // 可选：阻止不必要的资源加载
-      enableResourceBlocking: false // 默认不启用，可通过请求参数控制
+      blockResources: [], // 保持清空，确保图片能正常加载
+      enableResourceBlocking: false // 保持关闭
     },
     
     // 简化的智能裁剪配置
