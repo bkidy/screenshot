@@ -485,18 +485,29 @@ app.post('/screenshot', authenticate, screenshotRateLimit, concurrencyControl, a
     const fastMode = config.screenshot.performance.fastMode;
     const enableSmartDetection = config.screenshot.performance.enableSmartDetection;
     
-    // 超快速模式：对完整HTML文档使用极速路径
-    if (ultraFastMode && isCompleteHtml && config.screenshot.performance.skipAllDetectionInUltraFast) {
-      console.log('[Screenshot] 超快速模式：跳过所有等待和检测，直接截图');
+    // 超快速模式：对完整HTML文档使用简化检测
+    if (ultraFastMode && isCompleteHtml) {
+      console.log('[Screenshot] 超快速模式：简化检测，快速截图');
       
-      // 使用最快的页面设置策略
+      // 使用快速的页面设置策略
       await page.setContent(processedHtmlContent, {
-        waitUntil: 'domcontentloaded', // 最快的有效等待策略，等待DOM内容加载完成
-        timeout: 5000 // 短超时
+        waitUntil: config.screenshot.performance.ultraFastWaitStrategy || 'domcontentloaded',
+        timeout: 8000
       });
       
-      // 立即截图，无任何等待
-      console.log('[Screenshot] 超快速模式：立即执行截图');
+      // 简单检测img标签
+      const hasImages = await page.evaluate(() => {
+        const images = document.querySelectorAll('img');
+        return images.length > 0;
+      });
+      
+      if (hasImages) {
+        const waitTime = config.screenshot.performance.ultraFastWaitTime || 1000;
+        console.log(`[Screenshot] 超快速模式：检测到${hasImages}个img标签，等待 ${waitTime}ms`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      } else {
+        console.log('[Screenshot] 超快速模式：无img标签，直接截图');
+      }
       
     } else {
       // 标准/快速模式：使用原有逻辑

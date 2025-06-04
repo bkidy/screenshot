@@ -85,18 +85,18 @@ module.exports = {
       // 等待策略优化 - 提供多种性能模式
       waitStrategy: 'domcontentloaded', // 标准等待策略
       fastMode: true, // 启用快速模式
-      ultraFastMode: true, // 启用超快速模式，跳过所有等待
+      ultraFastMode: true, // 启用超快速模式
       
       // 超快速模式配置
-      ultraFastWaitStrategy: 'none', // 超快速模式不等待任何事件
-      skipAllDetectionInUltraFast: true, // 超快速模式跳过所有检测
+      ultraFastWaitStrategy: 'domcontentloaded', // 超快速模式等待DOM加载完成
+      skipAllDetectionInUltraFast: false, // 超快速模式进行简单检测
       
       // 优化后的等待时间
       additionalWaitTime: 300, // 标准模式等待时间
       fastModeWaitTime: 100, // 快速模式等待时间
-      ultraFastWaitTime: 0, // 超快速模式等待时间
+      ultraFastWaitTime: 1000, // 超快速模式图片等待时间
       
-      // 图片加载配置 - 大幅优化
+      // 图片加载配置
       imageWaitTime: 2000, // 标准模式图片等待时间
       backgroundImageWaitTime: 3000, // 标准模式背景图片等待时间
       renderCompletionWaitTime: 200, // 标准模式渲染完成等待时间
