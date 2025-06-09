@@ -7,7 +7,7 @@ WORKDIR /app
 # 创建非root用户（如果不存在）
 USER root
 
-# 优化系统依赖安装，添加全面的字体支持
+# 优化系统依赖安装，添加字体支持
 RUN apt-get update && \
     apt-get install -y \
         curl \
@@ -15,10 +15,8 @@ RUN apt-get update && \
         # 基础字体包
         fonts-liberation \
         fonts-dejavu-core \
-        fonts-opensans \
         # 中文字体
         fonts-noto-cjk \
-        fonts-noto-cjk-extra \
         fonts-wqy-zenhei \
         fonts-wqy-microhei \
         fonts-arphic-ukai \
@@ -29,10 +27,7 @@ RUN apt-get update && \
         fonts-noto-mono \
         # 其他语言字体
         fonts-noto-core \
-        fonts-noto-ui-core \
         # 系统字体
-        fonts-ubuntu \
-        fonts-roboto \
         fonts-droid-fallback \
         # 字体配置
         fontconfig \
