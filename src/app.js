@@ -510,7 +510,7 @@ app.post('/screenshot', authenticate, screenshotRateLimit, concurrencyControl, a
       });
       
       if (hasImages.hasImgTags || hasImages.hasBgImages) {
-        const waitTime = config.screenshot.performance.ultraFastWaitTime || 2000;
+        const waitTime = config.screenshot.performance.ultraFastWaitTime || 3000;
         const imageType = hasImages.hasImgTags && hasImages.hasBgImages ? 'img标签和背景图片' : 
                          hasImages.hasImgTags ? 'img标签' : '背景图片';
         console.log(`[Screenshot] 超快速模式：检测到${imageType}，等待 ${waitTime}ms`);

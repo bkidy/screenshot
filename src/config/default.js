@@ -94,7 +94,7 @@ module.exports = {
       // 优化后的等待时间
       additionalWaitTime: 500, // 标准模式等待时间
       fastModeWaitTime: 200, // 快速模式等待时间
-      ultraFastWaitTime: 2000, // 超快速模式图片等待时间
+      ultraFastWaitTime: 3000, // 超快速模式图片等待时间
       
       // 图片加载配置
       imageWaitTime: 2000, // 标准模式图片等待时间
