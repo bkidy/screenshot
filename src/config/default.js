@@ -97,13 +97,13 @@ module.exports = {
       ultraFastWaitTime: 2000, // 超快速模式图片等待时间
       
       // 图片加载配置
-      imageWaitTime: 3000, // 标准模式图片等待时间
+      imageWaitTime: 2000, // 标准模式图片等待时间
       backgroundImageWaitTime: 4000, // 标准模式背景图片等待时间
       renderCompletionWaitTime: 500, // 标准模式渲染完成等待时间
       
       // 智能检测配置
       enableSmartDetection: true, // 启用智能检测
-      skipImageDetectionForCompleteHtml: true, // 对完整HTML跳过复杂的图片检测
+      skipImageDetectionForCompleteHtml: false, // 对所有HTML都进行完整的图片检测
       disableSmartCropInFastMode: true, // 快速模式下禁用智能裁剪
       
       // 资源加载优化
