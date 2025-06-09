@@ -495,19 +495,29 @@ app.post('/screenshot', authenticate, screenshotRateLimit, concurrencyControl, a
         timeout: 8000
       });
       
-      // 简单检测img标签
+      // 检测img标签和背景图片
       const hasImages = await page.evaluate(() => {
         const images = document.querySelectorAll('img');
-        return images.length > 0;
+        const bgImages = Array.from(document.querySelectorAll('*')).some(el => {
+          const style = window.getComputedStyle(el);
+          return style.backgroundImage && style.backgroundImage !== 'none' && style.backgroundImage.includes('url(');
+        });
+        return { 
+          hasImgTags: images.length > 0, 
+          hasBgImages: bgImages,
+          total: images.length + (bgImages ? 1 : 0)
+        };
       });
       
-      if (hasImages) {
-        const waitTime = config.screenshot.performance.ultraFastWaitTime || 1000;
-        console.log(`[Screenshot] 超快速模式：检测到img标签，等待 ${waitTime}ms`);
+      if (hasImages.hasImgTags || hasImages.hasBgImages) {
+        const waitTime = config.screenshot.performance.ultraFastWaitTime || 2000;
+        const imageType = hasImages.hasImgTags && hasImages.hasBgImages ? 'img标签和背景图片' : 
+                         hasImages.hasImgTags ? 'img标签' : '背景图片';
+        console.log(`[Screenshot] 超快速模式：检测到${imageType}，等待 ${waitTime}ms`);
         await new Promise(resolve => setTimeout(resolve, waitTime));
       } else {
         const baseWaitTime = 500; // 基本等待时间
-        console.log(`[Screenshot] 超快速模式：无img标签，基本等待 ${baseWaitTime}ms`);
+        console.log(`[Screenshot] 超快速模式：无图片内容，基本等待 ${baseWaitTime}ms`);
         await new Promise(resolve => setTimeout(resolve, baseWaitTime));
       }
       
