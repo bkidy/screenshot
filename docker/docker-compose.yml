@@ -13,8 +13,8 @@ services:
     container_name: screenshot-service
     restart: unless-stopped
     
-    # 共享内存配置 - 关键性能优化
-    shm_size: 2gb
+    # 共享内存配置 - 2H2G VPS优化
+    shm_size: 512m
     
     # 端口映射
     ports:
@@ -32,9 +32,9 @@ services:
       - API_KEY=${API_KEY:-disabled}
       - CORS_ORIGINS=${CORS_ORIGINS:-*}
       
-      # 性能优化环境变量
-      - NODE_OPTIONS=--max-old-space-size=1536
-      - UV_THREADPOOL_SIZE=16
+      # 性能优化环境变量 - 2H2G VPS适配
+      - NODE_OPTIONS=--max-old-space-size=768
+      - UV_THREADPOOL_SIZE=8
       - PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
       
       # 性能监控
@@ -51,15 +51,15 @@ services:
       # 临时文件目录优化
       - /tmp:/tmp
     
-    # 优化后的资源限制
+    # 2H2G VPS资源限制
     deploy:
       resources:
         limits:
-          memory: 2G
-          cpus: '1.0'
+          memory: 1.5G  # 预留0.5G给系统
+          cpus: '1.5'   # 预留0.5H给系统
         reservations:
-          memory: 768M  # 提高最小内存保证
-          cpus: '0.5'   # 提高最小CPU保证
+          memory: 512M  # 降低最小内存要求
+          cpus: '0.3'   # 降低最小CPU要求
     
     # 优化后的健康检查
     healthcheck:

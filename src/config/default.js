@@ -77,8 +77,8 @@ module.exports = {
     
     // 性能优化配置
     performance: {
-      // 并发控制
-      maxConcurrentPages: 3, // 限制同时处理的页面数
+      // 并发控制 - 2H2G VPS优化
+      maxConcurrentPages: 5, // 限制同时处理的页面数
       pageTimeout: 15000, // 恢复到15秒，足够处理大部分内容
       navigationTimeout: 10000, // 恢复到10秒
       

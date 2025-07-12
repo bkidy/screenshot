@@ -84,42 +84,57 @@ function concurrencyControl(req, res, next) {
 }
 
 /**
+ * 智能性能模式检测 - 基于图片资源优先原则
+ */
+function detectPerformanceMode(htmlContent) {
+  const imgCount = (htmlContent.match(/<img[^>]*>/gi) || []).length;
+  const backgroundImages = (htmlContent.match(/background-image\s*:\s*url/gi) || []).length;
+  const totalImages = imgCount + backgroundImages;
+  
+  if (totalImages === 0) {
+    return 'ultrafast';
+  } else if (totalImages <= 2) {
+    return 'fast'; 
+  } else {
+    return 'standard';
+  }
+}
+
+/**
  * 优化后的浏览器初始化
  */
 async function initializeBrowser() {
   try {
-    console.log('Initializing optimized Puppeteer browser...');
-    
+    console.log('[BROWSER] Initializing...');
     browser = await puppeteer.launch({
       ...config.puppeteer,
       defaultViewport: config.puppeteer.defaultViewport
     });
-    
-    console.log('Puppeteer browser initialized successfully with optimizations');
+    console.log('[BROWSER] Initialized successfully');
     
     // 浏览器健康检查
     setInterval(async () => {
       try {
         if (browser && browser.isConnected()) {
           const pages = await browser.pages();
-          console.log(`[HEALTH] Browser healthy, ${pages.length} pages open, ${activePagesCount} active`);
-          
+          if (config.logging.logPerformance) {
+            console.log(`[HEALTH] Browser: ${pages.length} pages, ${activePagesCount} active`);
+          }
           // 如果处理的请求数过多，重启浏览器实例
           if (totalRequestsProcessed > config.browserPool.restartThreshold) {
-            console.log(`[HEALTH] Restarting browser after ${totalRequestsProcessed} requests`);
+            console.log(`[BROWSER] Restarting after ${totalRequestsProcessed} requests`);
             await restartBrowser();
           }
         } else {
-          console.warn('[HEALTH] Browser disconnected, reinitializing...');
+          console.warn('[BROWSER] Disconnected, reinitializing...');
           await initializeBrowser();
         }
       } catch (error) {
-        console.error('[HEALTH] Browser health check failed:', error.message);
+        console.error('[BROWSER] Health check failed:', error.message);
       }
     }, config.browserPool.healthCheckInterval);
     
   } catch (error) {
-    console.error('Failed to initialize Puppeteer browser:', error.message);
     throw error;
   }
 }
@@ -135,219 +150,96 @@ async function restartBrowser() {
     totalRequestsProcessed = 0;
     await initializeBrowser();
   } catch (error) {
-    console.error('Failed to restart browser:', error.message);
     throw error;
   }
 }
 
 /**
- * 检测并等待所有图片（包括背景图片）加载完成
+ * 官方推荐的图片等待函数 - 基于Puppeteer最佳实践
  * @param {Object} page - Puppeteer页面对象
- * @param {number} maxWaitTime - 最大等待时间（毫秒）
+ * @param {number} timeout - 超时时间（毫秒）
  */
-async function waitForAllImagesIfNeeded(page, maxWaitTime = 8000) {
+async function waitForAllImages(page, timeout = 8000) {
   try {
-    // 检测页面中的所有图片（包括背景图片）
-    const imageInfo = await page.evaluate(() => {
-      const images = document.querySelectorAll('img');
-      const imageCount = images.length;
+    const startTime = Date.now();
+    
+    // 官方推荐的图片等待方法
+    await page.evaluate(async () => {
+      // 等待所有img标签加载完成
+      const images = Array.from(document.querySelectorAll('img'));
+      await Promise.all(images.map(img => {
+        if (img.complete) return Promise.resolve();
+        return new Promise(resolve => {
+          img.onload = resolve;
+          img.onerror = resolve; // 重要：错误时也要resolve，避免无限等待
+        });
+      }));
       
-      // 检查CSS背景图片
-      const elementsWithBgImages = [];
-      const allElements = document.querySelectorAll('*');
+      // 等待背景图片加载（如果有的话）
+      const elementsWithBg = Array.from(document.querySelectorAll('*')).filter(el => {
+        const style = window.getComputedStyle(el);
+        return style.backgroundImage && style.backgroundImage !== 'none' && style.backgroundImage.includes('url(');
+      });
       
-      for (const element of allElements) {
-        const style = window.getComputedStyle(element);
-        const bgImage = style.backgroundImage;
-        
-        if (bgImage && bgImage !== 'none' && bgImage.includes('url(')) {
-          // 提取背景图片URL
+      if (elementsWithBg.length > 0) {
+        const bgImagePromises = elementsWithBg.map(el => {
+          const style = window.getComputedStyle(el);
+          const bgImage = style.backgroundImage;
           const urlMatch = bgImage.match(/url\(['"]?([^'"]+)['"]?\)/);
+          
           if (urlMatch && urlMatch[1]) {
-            elementsWithBgImages.push({
-              element,
-              url: urlMatch[1],
-              loaded: false
+            return new Promise(resolve => {
+              const img = new Image();
+              img.onload = resolve;
+              img.onerror = resolve; // 错误时也resolve
+              img.src = urlMatch[1];
             });
           }
-        }
+          return Promise.resolve();
+        });
+        
+        await Promise.all(bgImagePromises);
       }
-      
-      console.log(`[ImageDetection] 发现 ${imageCount} 个img标签, ${elementsWithBgImages.length} 个背景图片`);
-      
-      if (imageCount === 0 && elementsWithBgImages.length === 0) {
-        return { 
-          hasImages: false, 
-          totalImages: 0,
-          totalBgImages: 0
-        };
-      }
+    });
 
-      // 检查img标签加载状态
-      let loadedCount = 0;
-      let failedCount = 0;
+    const duration = Date.now() - startTime;
+    
+    // 获取加载统计信息
+    const stats = await page.evaluate(() => {
+      const images = document.querySelectorAll('img');
+      let loaded = 0, failed = 0;
       
       for (const img of images) {
         if (img.complete) {
           if (img.naturalWidth > 0) {
-            loadedCount++;
+            loaded++;
           } else {
-            failedCount++;
+            failed++;
           }
         }
       }
       
-      // 检查背景图片加载状态
-      let bgLoadedCount = 0;
-      const bgImagePromises = [];
-      
-      for (const bgInfo of elementsWithBgImages) {
-        const testImg = new Image();
-        const promise = new Promise((resolve) => {
-          testImg.onload = () => {
-            bgInfo.loaded = true;
-            bgLoadedCount++;
-            resolve(true);
-          };
-          testImg.onerror = () => {
-            resolve(false);
-          };
-          testImg.src = bgInfo.url;
-        });
-        bgImagePromises.push(promise);
-      }
+      const bgElements = Array.from(document.querySelectorAll('*')).filter(el => {
+        const style = window.getComputedStyle(el);
+        return style.backgroundImage && style.backgroundImage !== 'none' && style.backgroundImage.includes('url(');
+      });
       
       return {
-        hasImages: true,
-        totalImages: imageCount,
-        totalBgImages: elementsWithBgImages.length,
-        loadedImages: loadedCount,
-        failedImages: failedCount,
-        bgImagePromises,
-        bgImageUrls: elementsWithBgImages.map(bg => bg.url),
-        needsWaiting: (loadedCount + failedCount) < imageCount || elementsWithBgImages.length > 0
+        totalImages: images.length,
+        loadedImages: loaded,
+        failedImages: failed,
+        backgroundImages: bgElements.length
       };
     });
-
-    // 如果没有图片，直接返回
-    if (!imageInfo.hasImages) {
-      console.log('[ImageCheck] 页面无图片，跳过等待');
-      return { success: true, message: 'No images found' };
-    }
-
-    console.log(`[ImageCheck] 发现 ${imageInfo.totalImages} 个img标签, ${imageInfo.totalBgImages} 个背景图片`);
-    console.log(`[ImageCheck] 背景图片URLs: ${imageInfo.bgImageUrls.join(', ')}`);
-
-    // 如果有背景图片，需要特别处理
-    if (imageInfo.totalBgImages > 0) {
-      console.log(`[ImageCheck] 检测到背景图片，开始等待加载...`);
-      
-      const startTime = Date.now();
-      const checkInterval = 300; // 每300ms检查一次
-      let allBgImagesLoaded = false;
-      
-      // 等待背景图片加载
-      while (Date.now() - startTime < maxWaitTime && !allBgImagesLoaded) {
-        const bgLoadStatus = await page.evaluate((bgUrls) => {
-          let loadedCount = 0;
-          const promises = bgUrls.map(url => {
-            return new Promise((resolve) => {
-              const testImg = new Image();
-              testImg.onload = () => resolve(true);
-              testImg.onerror = () => resolve(false);
-              testImg.src = url;
-              
-              // 如果图片已经在缓存中，立即触发onload
-              if (testImg.complete) {
-                if (testImg.naturalWidth > 0) {
-                  resolve(true);
-                } else {
-                  resolve(false);
-                }
-              }
-            });
-          });
-          
-          return Promise.all(promises).then(results => {
-            const loaded = results.filter(r => r).length;
-            return {
-              loadedBgImages: loaded,
-              totalBgImages: bgUrls.length,
-              allLoaded: loaded === bgUrls.length
-            };
-          });
-        }, imageInfo.bgImageUrls);
-        
-        console.log(`[ImageCheck] 背景图片加载状态: ${bgLoadStatus.loadedBgImages}/${bgLoadStatus.totalBgImages}`);
-        
-        if (bgLoadStatus.allLoaded) {
-          allBgImagesLoaded = true;
-          const waitTime = Date.now() - startTime;
-          console.log(`[ImageCheck] 所有背景图片加载完成 - 耗时: ${waitTime}ms`);
-          break;
-        }
-        
-        // 等待一小段时间后再次检查
-        await new Promise(resolve => setTimeout(resolve, checkInterval));
-      }
-      
-      if (!allBgImagesLoaded) {
-        const waitTime = Date.now() - startTime;
-        console.log(`[ImageCheck] 背景图片等待超时 - 耗时: ${waitTime}ms，继续截图流程`);
-      }
-    }
-
-    // 检查常规img标签
-    if (imageInfo.totalImages > 0) {
-      const startTime = Date.now();
-      const checkInterval = 200;
-      
-      while (Date.now() - startTime < maxWaitTime) {
-        const currentStatus = await page.evaluate(() => {
-          const images = document.querySelectorAll('img');
-          let loaded = 0;
-          let failed = 0;
-          
-          for (const img of images) {
-            if (img.complete) {
-              if (img.naturalWidth > 0) {
-                loaded++;
-              } else {
-                failed++;
-              }
-            }
-          }
-          
-          return {
-            loadedImages: loaded,
-            failedImages: failed,
-            totalProcessed: loaded + failed,
-            totalImages: images.length
-          };
-        });
-
-        // 如果所有img标签都处理完成，退出等待
-        if (currentStatus.totalProcessed >= currentStatus.totalImages) {
-          const waitTime = Date.now() - startTime;
-          console.log(`[ImageCheck] img标签加载完成 - 耗时: ${waitTime}ms, 成功: ${currentStatus.loadedImages}, 失败: ${currentStatus.failedImages}`);
-          break;
-        }
-
-        await new Promise(resolve => setTimeout(resolve, checkInterval));
-      }
-    }
-
+    
     return { 
       success: true, 
-      message: 'All images processed',
-      stats: {
-        totalImages: imageInfo.totalImages,
-        totalBgImages: imageInfo.totalBgImages
-      }
+      message: 'Official method completed',
+      stats: stats,
+      duration: duration
     };
 
   } catch (error) {
-    console.error('[ImageCheck] 图片检测失败:', error.message);
     return { success: false, error: error.message };
   }
 }
@@ -412,6 +304,7 @@ app.get('/health', (req, res) => {
  */
 app.post('/screenshot', authenticate, screenshotRateLimit, concurrencyControl, async (req, res) => {
   const startTime = Date.now();
+  const requestId = Math.random().toString(36).substr(2, 9);
   let page = null;
 
   try {
@@ -420,6 +313,7 @@ app.post('/screenshot', authenticate, screenshotRateLimit, concurrencyControl, a
     // 参数验证
     const validationErrors = validateScreenshotParams(req.body);
     if (validationErrors.length > 0) {
+      console.warn(`[REQ] Parameter validation failed:`, validationErrors);
       return res.status(400).json({
         error: 'Invalid parameters',
         details: validationErrors
@@ -440,17 +334,22 @@ app.post('/screenshot', authenticate, screenshotRateLimit, concurrencyControl, a
       quality,
       enableResourceBlocking = config.screenshot.performance.enableResourceBlocking
     } = options;
-
-    console.log(`[REQ] Screenshot: ${width}x${height}, format: ${format}, blocking: ${enableResourceBlocking}`);
+    
+    // 生产日志：请求开始
+    console.log(`[REQ] ${width}x${height} ${format} - Active: ${activePagesCount}/${config.screenshot.performance.maxConcurrentPages}`);
 
     // 检查浏览器状态
     if (!browser || !browser.isConnected()) {
-      console.log('Browser not available, reinitializing...');
       await initializeBrowser();
     }
 
     // 创建新页面
     page = await browser.newPage();
+    
+    // 页面错误监听
+    page.on('error', () => {});
+    page.on('pageerror', () => {});
+    page.on('requestfailed', () => {});
     
     // 资源阻止优化（可选）
     if (enableResourceBlocking) {
@@ -479,115 +378,179 @@ app.post('/screenshot', authenticate, screenshotRateLimit, concurrencyControl, a
     // 预处理HTML内容
     const processedHtmlContent = preprocessHtmlForScreenshot(htmlContent, options);
 
-    // 智能性能模式选择
+    // 智能性能模式选择 - 基于内容自动检测
+    const detectedMode = detectPerformanceMode(htmlContent);
     const isCompleteHtml = htmlContent.includes('<!DOCTYPE') || htmlContent.includes('<html');
-    const ultraFastMode = config.screenshot.performance.ultraFastMode;
-    const fastMode = config.screenshot.performance.fastMode;
-    const enableSmartDetection = config.screenshot.performance.enableSmartDetection;
     
-    // 超快速模式：对完整HTML文档使用简化检测
-    if (ultraFastMode && isCompleteHtml) {
-      console.log('[Screenshot] 超快速模式：简化检测，快速截图');
+    // 生产日志：模式检测
+    console.log(`[MODE] ${detectedMode} - Images: ${(htmlContent.match(/<img[^>]*>/gi) || []).length}`);
+    
+    // 根据检测结果设置模式
+    const ultraFastMode = detectedMode === 'ultrafast';
+    const fastMode = detectedMode === 'fast';
+    const standardMode = detectedMode === 'standard';
+    
+    // 使用保守的load策略确保资源完全加载
+    let waitStrategy = 'load'; // 改为load事件，等待所有资源
+    let additionalConcurrencyWait = 0;
+    
+    if (activePagesCount >= 3) {
+      additionalConcurrencyWait = activePagesCount * 300;
+    }
+    
+    // 超快速模式
+    if (ultraFastMode) {
       
-      // 使用快速的页面设置策略
+      // 使用load事件等待所有资源
       await page.setContent(processedHtmlContent, {
-        waitUntil: config.screenshot.performance.ultraFastWaitStrategy || 'domcontentloaded',
-        timeout: 8000
+        waitUntil: waitStrategy,
+        timeout: 15000 + additionalConcurrencyWait // 增加超时时间适应load事件
       });
       
-      // 检测img标签和背景图片
-      const hasImages = await page.evaluate(() => {
+      // 等待字体渲染完成
+      try {
+        await Promise.race([
+          page.evaluate(() => document.fonts.ready),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Font timeout')), 3000))
+        ]);
+        // Font loaded successfully
+      } catch (error) {
+        console.warn(`[FONT] Loading timeout in ultrafast mode`);
+      }
+      
+      // 改进的图片检测逻辑
+      const imageDetectionResult = await page.evaluate(() => {
         const images = document.querySelectorAll('img');
-        const bgImages = Array.from(document.querySelectorAll('*')).some(el => {
+        const imageCount = images.length;
+        
+        // 检查所有img标签的加载状态
+        let loadedImgs = 0;
+        let failedImgs = 0;
+        
+        for (const img of images) {
+          if (img.complete) {
+            if (img.naturalWidth > 0) {
+              loadedImgs++;
+            } else {
+              failedImgs++;
+            }
+          }
+        }
+        
+        // 检查背景图片
+        const elementsWithBg = Array.from(document.querySelectorAll('*')).filter(el => {
           const style = window.getComputedStyle(el);
           return style.backgroundImage && style.backgroundImage !== 'none' && style.backgroundImage.includes('url(');
         });
-        return { 
-          hasImgTags: images.length > 0, 
-          hasBgImages: bgImages,
-          total: images.length + (bgImages ? 1 : 0)
+        
+        return {
+          totalImages: imageCount,
+          loadedImages: loadedImgs,
+          failedImages: failedImgs,
+          pendingImages: imageCount - loadedImgs - failedImgs,
+          backgroundImageCount: elementsWithBg.length,
+          needsWaiting: (imageCount > 0 && loadedImgs + failedImgs < imageCount) || elementsWithBg.length > 0
         };
       });
       
-      if (hasImages.hasImgTags || hasImages.hasBgImages) {
-        const waitTime = config.screenshot.performance.ultraFastWaitTime || 3000;
-        const imageType = hasImages.hasImgTags && hasImages.hasBgImages ? 'img标签和背景图片' : 
-                         hasImages.hasImgTags ? 'img标签' : '背景图片';
-        console.log(`[Screenshot] 超快速模式：检测到${imageType}，等待 ${waitTime}ms`);
-        await new Promise(resolve => setTimeout(resolve, waitTime));
+      if (imageDetectionResult.needsWaiting) {
+        // 根据图片数量动态调整等待时间
+        const baseWaitTime = config.screenshot.performance.ultraFastWaitTime || 3000;
+        const imageCount = imageDetectionResult.totalImages + imageDetectionResult.backgroundImageCount;
+        const dynamicWaitTime = Math.min(baseWaitTime + (imageCount * 200), 8000); // 每个图片额外等200ms，最多8秒
+        
+        await new Promise(resolve => setTimeout(resolve, dynamicWaitTime + additionalConcurrencyWait));
       } else {
-        const baseWaitTime = 500; // 基本等待时间
-        console.log(`[Screenshot] 超快速模式：无图片内容，基本等待 ${baseWaitTime}ms`);
-        await new Promise(resolve => setTimeout(resolve, baseWaitTime));
+        await new Promise(resolve => setTimeout(resolve, 200));
       }
       
     } else {
-      // 标准/快速模式：使用原有逻辑
+      // 标准/快速模式：使用load事件等待所有资源
       await page.setContent(processedHtmlContent, {
-        waitUntil: config.screenshot.performance.waitStrategy,
-        timeout: config.screenshot.performance.navigationTimeout
+        waitUntil: waitStrategy,
+        timeout: 20000 + additionalConcurrencyWait // 增加超时时间适应load事件
       });
+      
+      // 等待字体渲染完成
+      try {
+        await Promise.race([
+          page.evaluate(() => document.fonts.ready),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Font timeout')), 5000))
+        ]);
+      } catch (error) {
+        // Font loading failed, continue
+      }
 
       // 智能图片检测 - 根据内容类型选择策略
       let imageResult = { success: true, message: 'Skipped', stats: { totalImages: 0, totalBgImages: 0 } };
       
-      if (enableSmartDetection && isCompleteHtml && config.screenshot.performance.skipImageDetectionForCompleteHtml) {
-        // 对于完整HTML文档，使用快速检测
-        console.log('[Screenshot] 完整HTML文档，使用快速模式，跳过复杂图片检测');
+      if (fastMode) {
         
-        // 简单的图片存在性检查
-        const hasImages = await page.evaluate(() => {
+        // 改进的图片检测 - 获取实际图片数量和状态
+        const imageAnalysis = await page.evaluate(() => {
           const images = document.querySelectorAll('img');
-          const bgImages = Array.from(document.querySelectorAll('*')).some(el => {
+          const imageCount = images.length;
+          
+          // 检查img标签加载状态
+          let loadedImgs = 0;
+          let pendingImgs = 0;
+          
+          for (const img of images) {
+            if (img.complete && img.naturalWidth > 0) {
+              loadedImgs++;
+            } else if (!img.complete) {
+              pendingImgs++;
+            }
+          }
+          
+          // 检查背景图片数量
+          const bgElements = Array.from(document.querySelectorAll('*')).filter(el => {
             const style = window.getComputedStyle(el);
             return style.backgroundImage && style.backgroundImage !== 'none' && style.backgroundImage.includes('url(');
           });
-          return { hasImages: images.length > 0, hasBgImages: bgImages };
+          
+          return { 
+            totalImages: imageCount,
+            loadedImages: loadedImgs,
+            pendingImages: pendingImgs,
+            backgroundImages: bgElements.length,
+            hasImages: imageCount > 0,
+            hasBgImages: bgElements.length > 0
+          };
         });
         
-        if (hasImages.hasImages || hasImages.hasBgImages) {
-          // 如果有图片，给一个较短的等待时间
-          const quickWaitTime = fastMode ? 500 : 1000; // 进一步减少等待时间
-          console.log(`[Screenshot] 检测到图片，快速等待 ${quickWaitTime}ms`);
-          await new Promise(resolve => setTimeout(resolve, quickWaitTime));
+        if (imageAnalysis.hasImages || imageAnalysis.hasBgImages) {
+          // load事件后的最终图片检查等待
+          const totalImageCount = imageAnalysis.totalImages + imageAnalysis.backgroundImages;
+          const baseWaitTime = fastMode ? 300 : 500; // 减少等待时间，因为load事件已确保加载
+          const dynamicWaitTime = Math.min(baseWaitTime + (totalImageCount * 100), 2000); // 每个图片100ms，最多2秒
+          
+          await new Promise(resolve => setTimeout(resolve, dynamicWaitTime));
         }
         
         imageResult = { 
           success: true, 
-          message: 'Fast mode', 
+          message: 'Improved fast mode', 
           stats: { 
-            totalImages: hasImages.hasImages ? 1 : 0, 
-            totalBgImages: hasImages.hasBgImages ? 1 : 0 
+            totalImages: imageAnalysis.totalImages, 
+            totalBgImages: imageAnalysis.backgroundImages,
+            loadedImages: imageAnalysis.loadedImages
           } 
         };
-      } else {
-        // 使用完整的图片检测逻辑（保留原有功能）
-        const imageWaitTime = options.imageWaitTime || config.screenshot.performance.imageWaitTime || 2000;
-        imageResult = await waitForAllImagesIfNeeded(page, imageWaitTime);
-        
-        if (!imageResult.success) {
-          console.warn('[Screenshot] 图片检测失败，继续截图流程');
-        }
+      } else if (standardMode) {
+        const imageWaitTime = options.imageWaitTime || 3000;
+        imageResult = await waitForAllImages(page, imageWaitTime);
       }
 
-      // 优化后的额外等待时间逻辑
-      let additionalWait;
-      
-      if (fastMode) {
-        additionalWait = config.screenshot.performance.fastModeWaitTime || 100;
-        console.log(`[Screenshot] 快速模式，等待时间 ${additionalWait}ms`);
-      } else if (imageResult.stats && imageResult.stats.totalBgImages > 0) {
-        additionalWait = config.screenshot.performance.renderCompletionWaitTime || 200;
-        console.log(`[Screenshot] 检测到背景图片，等待时间 ${additionalWait}ms`);
-      } else {
-        additionalWait = Math.min(config.screenshot.performance.additionalWaitTime || 300, 100);
-      }
+      // 额外等待时间
+      let additionalWait = fastMode ? 100 : 
+        (imageResult.stats && imageResult.stats.totalBgImages > 0) ? 200 : 100;
       
       if (additionalWait > 0) {
         await new Promise(resolve => setTimeout(resolve, additionalWait));
       }
 
-      // 简化的渲染完成检查 - 仅在标准模式下执行
+      // 渲染完成检查
       if (!fastMode) {
         try {
           await page.evaluate(() => {
@@ -601,9 +564,8 @@ app.post('/screenshot', authenticate, screenshotRateLimit, concurrencyControl, a
               }
             });
           });
-          console.log('[Screenshot] 渲染完成检查通过');
         } catch (error) {
-          console.warn('[Screenshot] 渲染完成检查失败，继续截图:', error.message);
+          // Render check failed, continue
         }
       }
     }
@@ -616,13 +578,12 @@ app.post('/screenshot', authenticate, screenshotRateLimit, concurrencyControl, a
       height
     };
 
-    // 超快速模式或快速模式下禁用Smart Crop
+    // 智能裁剪检测
     const shouldSkipSmartCrop = ultraFastMode || 
       (fastMode && config.screenshot.performance.disableSmartCropInFastMode);
 
     if (!shouldSkipSmartCrop && options.smartCrop !== false && config.screenshot.smartCrop.enabled) {
       try {
-        console.log('[Screenshot] 执行智能裁剪检测');
         // 简化的内容边界检测
         const contentBounds = await page.evaluate((cropConfig) => {
           const elements = Array.from(document.querySelectorAll('*')).slice(0, cropConfig.maxElementsToCheck);
@@ -669,13 +630,10 @@ app.post('/screenshot', authenticate, screenshotRateLimit, concurrencyControl, a
         const minSize = config.screenshot.smartCrop.minContentSize;
         if (contentBounds && contentBounds.width > minSize && contentBounds.height > minSize) {
           clipRegion = contentBounds;
-          console.log(`[CROP] Smart crop: ${clipRegion.width}x${clipRegion.height} at (${clipRegion.x}, ${clipRegion.y})`);
         }
       } catch (error) {
-        console.warn('[CROP] Smart crop failed, using full viewport:', error.message);
+        // Smart crop failed, use full viewport
       }
-    } else {
-      console.log('[Screenshot] 跳过智能裁剪（性能优化）');
     }
 
     // 构建截图选项
@@ -694,8 +652,9 @@ app.post('/screenshot', authenticate, screenshotRateLimit, concurrencyControl, a
     
     const duration = Date.now() - startTime;
     totalRequestsProcessed++;
-    
-    console.log(`[SUCCESS] Screenshot generated in ${duration}ms, size: ${buffer.length} bytes`);
+
+    // 生产日志：请求成功
+    console.log(`[SUCCESS] ${duration}ms - ${(buffer.length/1024).toFixed(1)}KB - Total: ${totalRequestsProcessed}`);
 
     // 设置响应头
     res.set({
@@ -709,8 +668,9 @@ app.post('/screenshot', authenticate, screenshotRateLimit, concurrencyControl, a
 
   } catch (error) {
     const duration = Date.now() - startTime;
-    
-    console.error(`[ERROR] Screenshot failed in ${duration}ms:`, error.message);
+
+    // 生产日志：请求失败
+    console.error(`[ERROR] ${duration}ms - ${error.message} - Active: ${activePagesCount}`);
 
     res.status(500).json({
       error: 'Screenshot generation failed',
@@ -725,7 +685,7 @@ app.post('/screenshot', authenticate, screenshotRateLimit, concurrencyControl, a
       try {
         await page.close();
       } catch (error) {
-        console.warn('[CLEANUP] Failed to close page:', error.message);
+        // Failed to close page
       }
     }
   }
@@ -873,9 +833,8 @@ app.use('*', (req, res) => {
   });
 });
 
-// 简化的错误处理
+// 错误处理
 app.use((err, req, res, next) => {
-  console.error('Error:', err.message);
   res.status(err.status || 500).json({
     error: 'Internal Server Error',
     message: process.env.NODE_ENV === 'production' ? 'Something went wrong' : err.message
@@ -885,45 +844,35 @@ app.use((err, req, res, next) => {
 /**
  * 优雅关闭处理
  */
-async function gracefulShutdown(signal) {
-  console.log(`Received ${signal}, starting graceful shutdown...`);
-  
+async function gracefulShutdown() {
+  console.log('[SERVER] Shutting down gracefully...');
   try {
     if (browser) {
       await browser.close();
-      console.log('Browser closed successfully');
+      console.log('[BROWSER] Closed successfully');
     }
   } catch (error) {
-    console.error('Error closing browser:', error.message);
+    console.error('[BROWSER] Error closing:', error.message);
   }
-  
+  console.log('[SERVER] Shutdown complete');
   process.exit(0);
 }
 
 // 注册信号处理器
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', gracefulShutdown);
+process.on('SIGINT', gracefulShutdown);
 
 /**
  * 启动服务器
  */
 async function startServer() {
   try {
-    // 初始化浏览器
     await initializeBrowser();
-    
-    // 启动HTTP服务器
-    const server = app.listen(config.server.port, config.server.host, () => {
-      console.log(`Screenshot service started on ${config.server.host}:${config.server.port}`);
-      console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-      console.log(`Authentication: ${config.security.apiKey === 'disabled' ? 'disabled' : 'enabled'}`);
-    });
-
-    // 设置服务器超时
+    const server = app.listen(config.server.port, config.server.host);
     server.timeout = config.server.timeout;
-    
+    console.log(`[SERVER] Screenshot service started on ${config.server.host}:${config.server.port}`);
   } catch (error) {
-    console.error('Failed to start server:', error.message);
+    console.error('[SERVER] Failed to start:', error.message);
     process.exit(1);
   }
 }
